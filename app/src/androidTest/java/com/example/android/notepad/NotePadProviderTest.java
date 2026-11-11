@@ -119,6 +119,12 @@ public class NotePadProviderTest extends ProviderTestCase2<NotePadProvider> {
          * a database object from the helper.
          */
         mDb = getProvider().getOpenHelperForTest().getWritableDatabase();
+        // Modern runners retain the renamed fixture file between methods. Reset only
+        // that isolated test database; never clear the application's real database.
+        assertTrue("Provider fixture must use a renamed test database",
+                new java.io.File(mDb.getPath()).getName().startsWith("test."));
+        mDb.delete(NotePad.Notes.TABLE_NAME, null, null);
+        mDb.delete("categories", null, null);
     }
 
     /*
@@ -127,6 +133,7 @@ public class NotePadProviderTest extends ProviderTestCase2<NotePadProvider> {
      */
     @Override
     protected void tearDown() throws Exception {
+        getProvider().getOpenHelperForTest().close();
         super.tearDown();
     }
 

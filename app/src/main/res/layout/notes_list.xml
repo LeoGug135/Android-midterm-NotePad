@@ -3,6 +3,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
+    android:background="#FFFFFF"
     android:focusable="true"
     android:focusableInTouchMode="true">
 
@@ -49,13 +50,19 @@
         android:inputType="text"
         android:saveEnabled="false" />
 
+    <TextView android:id="@+id/trash_notice" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:padding="12dp"
+        android:text="删除的笔记保留在此，可恢复或手动彻底删除"
+        android:textSize="12sp" android:textColor="#85898E" android:visibility="gone" />
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">
 
-        <ListView
+        <com.example.android.notepad.NoteListView
             android:id="@android:id/list"
+            android:divider="@android:color/transparent" android:dividerHeight="1dp"
+            android:clipToPadding="false" android:paddingTop="10dp" android:paddingBottom="20dp"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
 
@@ -86,10 +93,17 @@
             android:textSize="12sp"
             android:textColor="#697586" />
 
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <Button android:id="@+id/move_selected" android:layout_width="0dp"
+                android:layout_height="48dp" android:layout_weight="1" android:text="移动分类" />
+            <Button android:id="@+id/restore_selected" android:layout_width="0dp"
+                android:layout_height="48dp" android:layout_weight="1" android:text="恢复" android:visibility="gone" />
         <Button
             android:id="@+id/delete_selected"
-            android:layout_width="match_parent"
+            android:layout_width="0dp" android:layout_weight="1"
             android:layout_height="48dp"
             android:textColor="#B42318" />
+        </LinearLayout>
     </LinearLayout>
 </LinearLayout>

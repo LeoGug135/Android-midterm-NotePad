@@ -63,7 +63,7 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
     /**
      * The database version
      */
-    private static final int DATABASE_VERSION = 2;
+    private static final int DATABASE_VERSION = 3;
 
     /**
      * A projection map used to select columns from the database
@@ -106,6 +106,8 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
 
     // Handle to a new DatabaseHelper.
     private DatabaseHelper mOpenHelper;
+    private static final int CATEGORIES = 4;
+    private static final int CATEGORY_ID = 5;
 
 
     /**
@@ -121,6 +123,8 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
 
         // Add a pattern that routes URIs terminated with "notes" to a NOTES operation
         sUriMatcher.addURI(NotePad.AUTHORITY, "notes", NOTES);
+        sUriMatcher.addURI(NotePad.AUTHORITY, "categories", CATEGORIES);
+        sUriMatcher.addURI(NotePad.AUTHORITY, "categories/#", CATEGORY_ID);
 
         // Add a pattern that routes URIs terminated with "notes" plus an integer
         // to a note ID operation
@@ -137,6 +141,9 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
         // Creates a new projection map instance. The map returns a column name
         // given a string. The two are usually equal.
         sNotesProjectionMap = new HashMap<String, String>();
+        for (String column : new String[] { "pinned", "background", "category_id", "deleted_at" }) {
+            sNotesProjectionMap.put(column, column);
+        }
 
         // Maps the string "_ID" to the column name "_ID"
         sNotesProjectionMap.put(NotePad.Notes._ID, NotePad.Notes._ID);
@@ -196,29 +203,36 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
                    + NotePad.Notes.COLUMN_NAME_TITLE + " TEXT,"
                    + NotePad.Notes.COLUMN_NAME_NOTE + " TEXT,"
                    + NotePad.Notes.COLUMN_NAME_CREATE_DATE + " INTEGER,"
-                   + NotePad.Notes.COLUMN_NAME_MODIFICATION_DATE + " INTEGER"
+                   + NotePad.Notes.COLUMN_NAME_MODIFICATION_DATE + " INTEGER,"
+                   + "pinned INTEGER NOT NULL DEFAULT 0,"
+                   + "background INTEGER NOT NULL DEFAULT 0,"
+                   + "category_id INTEGER NOT NULL DEFAULT 0,"
+                   + "deleted_at INTEGER NOT NULL DEFAULT 0"
                    + ");");
+           createCategories(db);
+       }
+
+       private static void createCategories(SQLiteDatabase db) {
+           db.execSQL("CREATE TABLE IF NOT EXISTS categories ("
+                   + "_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)");
+           db.execSQL("CREATE INDEX IF NOT EXISTS notes_scope ON notes(deleted_at, category_id, pinned)");
        }
 
        /**
         *
-        * Demonstrates that the provider must consider what happens when the
-        * underlying datastore is changed. In this sample, the database is upgraded the database
-        * by destroying the existing data.
-        * A real application should upgrade the database in place.
+        * Adds metadata columns and categories while preserving note IDs and content.
         */
        @Override
        public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
 
-           // Logs that the database is being upgraded
-           Log.w(TAG, "Upgrading database from version " + oldVersion + " to "
-                   + newVersion + ", which will destroy all old data");
-
-           // Kills the table and existing data
-           db.execSQL("DROP TABLE IF EXISTS notes");
-
-           // Recreates the database with a new version
-           onCreate(db);
+           // Upgrade the legacy schema in place: never discard existing notes.
+           if (oldVersion < 3) {
+               db.execSQL("ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
+               db.execSQL("ALTER TABLE notes ADD COLUMN background INTEGER NOT NULL DEFAULT 0");
+               db.execSQL("ALTER TABLE notes ADD COLUMN category_id INTEGER NOT NULL DEFAULT 0");
+               db.execSQL("ALTER TABLE notes ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0");
+               createCategories(db);
+           }
        }
    }
 
@@ -251,6 +265,18 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
    @Override
    public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
            String sortOrder) {
+
+       int match = sUriMatcher.match(uri);
+       if (match == CATEGORIES || match == CATEGORY_ID) {
+           SQLiteQueryBuilder categories = new SQLiteQueryBuilder();
+           categories.setTables("categories");
+           if (match == CATEGORY_ID) categories.appendWhere("_id=" + ContentUris.parseId(uri));
+           Cursor cursor = categories.query(mOpenHelper.getReadableDatabase(), projection,
+                   selection, selectionArgs, null, null,
+                   TextUtils.isEmpty(sortOrder) ? "_id ASC" : sortOrder);
+           cursor.setNotificationUri(getContext().getContentResolver(), NoteFeatures.CATEGORIES_URI);
+           return cursor;
+       }
 
        // Constructs a new query builder and sets its table name
        SQLiteQueryBuilder qb = new SQLiteQueryBuilder();
@@ -288,6 +314,10 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
                throw new IllegalArgumentException("Unknown URI " + uri);
        }
 
+
+       qb.appendWhere((match == NOTE_ID ? " AND " : "")
+               + ("1".equals(uri.getQueryParameter("trash"))
+                       ? "deleted_at > 0" : "deleted_at = 0"));
 
        String orderBy;
        // If no sort order is specified, uses the default
@@ -335,6 +365,8 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
        /**
         * Chooses the MIME type based on the incoming URI pattern
         */
+       if (sUriMatcher.match(uri) == CATEGORIES) return "vnd.android.cursor.dir/vnd.notepad.category";
+       if (sUriMatcher.match(uri) == CATEGORY_ID) return "vnd.android.cursor.item/vnd.notepad.category";
        switch (sUriMatcher.match(uri)) {
 
            // If the pattern is for notes or live folders, returns the general content type.
@@ -497,6 +529,13 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
      */
     @Override
     public Uri insert(Uri uri, ContentValues initialValues) {
+        if (sUriMatcher.match(uri) == CATEGORIES) {
+            ContentValues category = categoryValues(initialValues);
+            long id = mOpenHelper.getWritableDatabase().insertOrThrow("categories", null, category);
+            notifyCategories();
+            return ContentUris.withAppendedId(NoteFeatures.CATEGORIES_URI, id);
+        }
+
 
         // Validates the incoming URI. Only the full provider URI is allowed for inserts.
         if (sUriMatcher.match(uri) != NOTES) {
@@ -580,6 +619,22 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
      */
     @Override
     public int delete(Uri uri, String where, String[] whereArgs) {
+        if (sUriMatcher.match(uri) == CATEGORY_ID) {
+            long id = ContentUris.parseId(uri);
+            SQLiteDatabase database = mOpenHelper.getWritableDatabase();
+            int removed;
+            database.beginTransaction();
+            try {
+                ContentValues uncategorized = new ContentValues();
+                uncategorized.put("category_id", 0);
+                database.update("notes", uncategorized, "category_id=?", new String[] { String.valueOf(id) });
+                removed = database.delete("categories", "_id=?", new String[] { String.valueOf(id) });
+                database.setTransactionSuccessful();
+            } finally { database.endTransaction(); }
+            notifyCategories();
+            return removed;
+        }
+
 
         // Opens the database object in "write" mode.
         SQLiteDatabase db = mOpenHelper.getWritableDatabase();
@@ -639,6 +694,8 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
          * and observers that have registered themselves for the provider are notified.
          */
         getContext().getContentResolver().notifyChange(uri, null);
+        if (!NotePad.Notes.CONTENT_URI.equals(uri))
+            getContext().getContentResolver().notifyChange(NotePad.Notes.CONTENT_URI, null);
 
         // Returns the number of rows deleted.
         return count;
@@ -666,6 +723,13 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
      */
     @Override
     public int update(Uri uri, ContentValues values, String where, String[] whereArgs) {
+        if (sUriMatcher.match(uri) == CATEGORY_ID) {
+            int count = mOpenHelper.getWritableDatabase().update("categories", categoryValues(values),
+                    "_id=?", new String[] { String.valueOf(ContentUris.parseId(uri)) });
+            notifyCategories();
+            return count;
+        }
+
 
         // Opens the database object in "write" mode.
         SQLiteDatabase db = mOpenHelper.getWritableDatabase();
@@ -732,9 +796,27 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
          * and observers that have registered themselves for the provider are notified.
          */
         getContext().getContentResolver().notifyChange(uri, null);
+        if (!NotePad.Notes.CONTENT_URI.equals(uri))
+            getContext().getContentResolver().notifyChange(NotePad.Notes.CONTENT_URI, null);
 
         // Returns the number of rows updated.
         return count;
+    }
+
+    private ContentValues categoryValues(ContentValues input) {
+        String name = input == null ? null : input.getAsString("name");
+        name = name == null ? "" : name.trim();
+        if (name.length() == 0 || name.length() > 20 || "未分类".equals(name)
+                || "全部".equals(name) || "最近删除".equals(name))
+            throw new IllegalArgumentException("Invalid category name");
+        ContentValues result = new ContentValues();
+        result.put("name", name);
+        return result;
+    }
+
+    private void notifyCategories() {
+        getContext().getContentResolver().notifyChange(NoteFeatures.CATEGORIES_URI, null);
+        getContext().getContentResolver().notifyChange(NotePad.Notes.CONTENT_URI, null);
     }
 
     /**

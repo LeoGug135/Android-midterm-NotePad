@@ -17,6 +17,7 @@
 package com.example.android.notepad;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.content.Context;
@@ -34,6 +35,9 @@ import android.util.AttributeSet;
 import android.util.Log;
 import android.view.View;
 import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.Button;
+import android.view.Gravity;
 import android.widget.Toast;
 import android.widget.TextView;
 
@@ -48,8 +52,11 @@ public class NoteEditor extends Activity {
     private static final String TAG = "NoteEditor";
     private static final String[] PROJECTION = {
             NotePad.Notes.COLUMN_NAME_TITLE, NotePad.Notes.COLUMN_NAME_NOTE,
-            NotePad.Notes.COLUMN_NAME_MODIFICATION_DATE
+            NotePad.Notes.COLUMN_NAME_MODIFICATION_DATE, "background", "category_id"
     };
+    private int mBackground;
+    private long mCategory;
+    private NoteDialogs mDialogs;
     private EditText mTitle;
     private EditText mText;
     private Uri mUri;
@@ -116,6 +123,18 @@ public class NoteEditor extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         setContentView(R.layout.note_editor);
+        mDialogs = new NoteDialogs(this);
+        mCategory = Math.max(0, getIntent().getLongExtra("category_id", 0));
+        findViewById(R.id.editor_appearance).setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { showAppearance(); }
+        });
+        findViewById(R.id.editor_category).setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                mDialogs.categoryPicker(mCategory, new NoteDialogs.CategoryChoice() {
+                    @Override public void select(long id) { mCategory = id; applyAppearance(); }
+                });
+            }
+        });
         mTitle = (EditText) findViewById(R.id.note_title);
         mText = (EditText) findViewById(R.id.note);
         mMetadataTime = System.currentTimeMillis();
@@ -136,6 +155,8 @@ public class NoteEditor extends Activity {
             String uri = state.getString("note_uri");
             mUri = uri == null ? null : Uri.parse(uri);
             mIsNewNote = state.getBoolean("new_note");
+            mBackground = state.getInt("background");
+            mCategory = state.getLong("category_id");
             mMetadataTime = state.getLong("metadata_time", mMetadataTime);
             ArrayList<Bundle> undo = state.getParcelableArrayList("undo_history");
             ArrayList<Bundle> redo = state.getParcelableArrayList("redo_history");
@@ -185,6 +206,7 @@ public class NoteEditor extends Activity {
             setSelection(mTitle, state.getInt("title_start"), state.getInt("title_end"));
             setSelection(mText, state.getInt("body_start"), state.getInt("body_end"));
         }
+        applyAppearance();
         updateEditorUi();
     }
 
@@ -284,6 +306,8 @@ public class NoteEditor extends Activity {
             if (cursor != null && cursor.moveToFirst()) {
                 String title = cursor.getString(0);
                 mMetadataTime = cursor.getLong(2);
+                mBackground = cursor.getInt(3);
+                mCategory = cursor.getLong(4);
                 mTitle.setText(isLegacyTitle(title) ? "" : title);
                 mText.setText(cursor.getString(1));
                 mLoaded = true;
@@ -319,6 +343,8 @@ public class NoteEditor extends Activity {
             String title = mTitle.getText().toString().trim();
             String body = mText.getText().toString();
             boolean changed = true;
+            boolean styleChanged = false;
+            if (mCategory > 0 && "未分类".equals(NoteFeatures.categoryName(this, mCategory))) mCategory = 0;
             if (mUri != null) {
                 Cursor cursor = getContentResolver().query(mUri, PROJECTION, null, null, null);
                 try {
@@ -333,15 +359,20 @@ public class NoteEditor extends Activity {
                             || (isLegacyTitle(cursor.getString(0))
                             && TextUtils.isEmpty(mTitle.getText().toString()));
                     changed = !sameTitle || !TextUtils.equals(body, cursor.getString(1));
+                    styleChanged = mBackground != cursor.getInt(3) || mCategory != cursor.getLong(4);
                 } finally {
                     if (cursor != null) cursor.close();
                 }
             }
-            if (changed) {
+            if (changed || styleChanged) {
                 ContentValues values = new ContentValues();
-                values.put(NotePad.Notes.COLUMN_NAME_TITLE, title);
-                values.put(NotePad.Notes.COLUMN_NAME_NOTE, body);
-                values.put(NotePad.Notes.COLUMN_NAME_MODIFICATION_DATE, System.currentTimeMillis());
+                if (changed) {
+                    values.put(NotePad.Notes.COLUMN_NAME_TITLE, title);
+                    values.put(NotePad.Notes.COLUMN_NAME_NOTE, body);
+                    values.put(NotePad.Notes.COLUMN_NAME_MODIFICATION_DATE, System.currentTimeMillis());
+                }
+                values.put("background", mBackground);
+                values.put("category_id", mCategory);
                 if (mUri == null) {
                     mUri = getContentResolver().insert(NotePad.Notes.CONTENT_URI, values);
                     if (mUri == null) throw new IllegalStateException("Insert returned null");
@@ -359,13 +390,82 @@ public class NoteEditor extends Activity {
         }
     }
 
+    private void applyAppearance() {
+        findViewById(R.id.editor_root).setBackgroundColor(NoteFeatures.color(mBackground));
+        mText.setTextSize(NoteFeatures.FONT_SIZES[NoteFeatures.fontIndex(this)]);
+        ((TextView) findViewById(R.id.editor_category)).setText("标签 · "
+                + NoteFeatures.categoryName(this, mCategory) + " ▾");
+    }
+
+    private TextView appearanceLabel(String text) {
+        TextView label = new TextView(this); label.setText(text); label.setTextSize(14);
+        label.setTextColor(0xFF626871); label.setPadding(0, NoteFeatures.dp(this, 14), 0, NoteFeatures.dp(this, 8));
+        return label;
+    }
+
+    private void showAppearance() {
+        android.view.inputmethod.InputMethodManager keyboard = (android.view.inputmethod.InputMethodManager)
+                getSystemService(INPUT_METHOD_SERVICE);
+        keyboard.hideSoftInputFromWindow(mText.getWindowToken(), 0);
+        LinearLayout panel = new LinearLayout(this); panel.setOrientation(LinearLayout.VERTICAL);
+        int padding = NoteFeatures.dp(this, 20); panel.setPadding(padding, 0, padding, padding);
+        panel.addView(appearanceLabel("笔记背景 · 仅用于当前笔记"));
+        final LinearLayout colors = new LinearLayout(this);
+        panel.addView(colors, new LinearLayout.LayoutParams(-1, -2));
+        for (int i = 0; i < NoteFeatures.COLORS.length; i++) {
+            final int index = i;
+            TextView color = new TextView(this); color.setGravity(Gravity.CENTER); color.setTextSize(18);
+            color.setText(mBackground == i ? "✓" : ""); color.setTextColor(0xFF41474F);
+            color.setContentDescription("背景：" + NoteFeatures.COLOR_NAMES[i]);
+            color.setSelected(mBackground == i);
+            android.graphics.drawable.GradientDrawable shape = NoteFeatures.rounded(this, NoteFeatures.COLORS[i], 22);
+            shape.setStroke(NoteFeatures.dp(this, 1), 0xFFD5D8DC); color.setBackgroundDrawable(shape);
+            LinearLayout.LayoutParams item = new LinearLayout.LayoutParams(0, NoteFeatures.dp(this, 42), 1);
+            item.setMargins(NoteFeatures.dp(this, 3), 0, NoteFeatures.dp(this, 3), 0);
+            colors.addView(color, item);
+            color.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    mBackground = index; applyAppearance();
+                    for (int j = 0; j < colors.getChildCount(); j++) {
+                        ((TextView) colors.getChildAt(j)).setText(j == index ? "✓" : "");
+                        colors.getChildAt(j).setSelected(j == index);
+                    }
+                }
+            });
+        }
+        panel.addView(appearanceLabel("正文字号 · 应用于所有笔记"));
+        final LinearLayout fonts = new LinearLayout(this); panel.addView(fonts);
+        for (int i = 0; i < NoteFeatures.FONT_SIZES.length; i++) {
+            final int index = i;
+            Button size = new Button(this); size.setText(NoteFeatures.FONT_NAMES[i]); size.setTextSize(14);
+            size.setContentDescription("字号：" + NoteFeatures.FONT_NAMES[i]);
+            size.setSelected(NoteFeatures.fontIndex(this) == i);
+            size.setTextColor(NoteFeatures.fontIndex(this) == i ? 0xFF836A00 : 0xFF41474F);
+            fonts.addView(size, new LinearLayout.LayoutParams(0, NoteFeatures.dp(this, 48), 1));
+            size.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    NoteFeatures.preferences(NoteEditor.this).edit().putInt("font_index", index).apply();
+                    applyAppearance();
+                    for (int j = 0; j < fonts.getChildCount(); j++) {
+                        fonts.getChildAt(j).setSelected(j == index);
+                        ((Button) fonts.getChildAt(j)).setTextColor(j == index ? 0xFF836A00 : 0xFF41474F);
+                    }
+                }
+            });
+        }
+        mDialogs.show(new AlertDialog.Builder(this).setTitle("背景与字号").setView(panel)
+                .setPositiveButton("完成", null).create());
+    }
+
     @Override protected void onResume() {
         super.onResume();
         mClock.removeCallbacks(mRefreshTime);
+        if (mLoaded) applyAppearance();
         mClock.post(mRefreshTime);
     }
 
     @Override protected void onDestroy() {
+        if (mDialogs != null) mDialogs.destroy();
         mClock.removeCallbacks(mRefreshTime);
         super.onDestroy();
     }
@@ -383,6 +483,8 @@ public class NoteEditor extends Activity {
         saveNote(false);
         state.putString("note_uri", mUri == null ? null : mUri.toString());
         state.putBoolean("new_note", mIsNewNote);
+        state.putInt("background", mBackground);
+        state.putLong("category_id", mCategory);
         state.putLong("metadata_time", mMetadataTime);
         state.putParcelableArrayList("undo_history", savedHistory(mUndo));
         state.putParcelableArrayList("redo_history", savedHistory(mRedo));

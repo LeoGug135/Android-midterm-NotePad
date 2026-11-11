@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/editor_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
@@ -42,6 +43,12 @@
             android:background="?android:attr/selectableItemBackground"
             android:contentDescription="@string/editor_redo" />
 
+        <com.example.android.notepad.NoteIconView
+            android:id="@+id/editor_appearance" android:tag="style"
+            android:layout_width="48dp" android:layout_height="48dp"
+            android:background="?android:attr/selectableItemBackground"
+            android:contentDescription="背景与字号" android:clickable="true" android:focusable="true" />
+
         <view
             class="com.example.android.notepad.NoteEditor$EditorActionView"
             android:id="@+id/editor_save"
@@ -82,6 +89,12 @@
         android:textColor="#999DA3"
         android:textSize="12sp" />
 
+    <TextView android:id="@+id/editor_category" android:layout_width="wrap_content"
+        android:layout_height="wrap_content" android:minHeight="36dp"
+        android:layout_marginLeft="24dp" android:layout_marginBottom="8dp"
+        android:gravity="center_vertical" android:paddingLeft="10dp" android:paddingRight="10dp"
+        android:textSize="12sp" android:textColor="#747A82" android:clickable="true"
+        android:focusable="true" android:background="?android:attr/selectableItemBackground" />
     <EditText
         android:id="@id/note"
         android:layout_width="match_parent"
