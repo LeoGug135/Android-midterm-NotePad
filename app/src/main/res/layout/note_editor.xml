@@ -3,49 +3,102 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="#FFFFFF"
-    android:focusable="true"
-    android:focusableInTouchMode="true">
+    android:background="#FFFFFF">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:paddingLeft="8dp"
+        android:paddingRight="8dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <view
+            class="com.example.android.notepad.NoteEditor$EditorActionView"
+            android:id="@+id/editor_back"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?android:attr/selectableItemBackground"
+            android:contentDescription="@string/editor_back" />
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1" />
+
+        <view
+            class="com.example.android.notepad.NoteEditor$EditorActionView"
+            android:id="@+id/editor_undo"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?android:attr/selectableItemBackground"
+            android:contentDescription="@string/editor_undo" />
+
+        <view
+            class="com.example.android.notepad.NoteEditor$EditorActionView"
+            android:id="@+id/editor_redo"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?android:attr/selectableItemBackground"
+            android:contentDescription="@string/editor_redo" />
+
+        <view
+            class="com.example.android.notepad.NoteEditor$EditorActionView"
+            android:id="@+id/editor_save"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?android:attr/selectableItemBackground"
+            android:contentDescription="@string/menu_save" />
+    </LinearLayout>
 
     <EditText
         android:id="@+id/note_title"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginLeft="16dp"
-        android:layout_marginRight="16dp"
+        android:layout_marginLeft="24dp"
+        android:layout_marginRight="24dp"
         android:layout_marginTop="12dp"
-        android:paddingTop="12dp"
-        android:paddingBottom="12dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"
+        android:background="@android:color/transparent"
         android:hint="@string/note_title_hint"
-        android:textSize="22sp"
+        android:textColor="#25282D"
+        android:textColorHint="#C5C7CA"
+        android:textSize="26sp"
         android:textStyle="bold"
         android:singleLine="true"
         android:inputType="textCapSentences"
-        android:imeOptions="actionNext" />
+        android:imeOptions="actionNext"
+        android:nextFocusForward="@+id/note"
+        android:saveEnabled="false" />
 
     <TextView
+        android:id="@+id/editor_metadata"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:paddingLeft="16dp"
-        android:paddingRight="16dp"
-        android:paddingTop="8dp"
-        android:paddingBottom="8dp"
-        android:text="@string/editor_save_hint"
-        android:textColor="#697586"
+        android:layout_marginLeft="24dp"
+        android:layout_marginRight="24dp"
+        android:layout_marginBottom="16dp"
+        android:textColor="#999DA3"
         android:textSize="12sp" />
 
-    <view
-        class="com.example.android.notepad.NoteEditor$LinedEditText"
-        android:id="@+id/note"
+    <EditText
+        android:id="@id/note"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
         android:background="@android:color/transparent"
-        android:padding="16dp"
-        android:hint="@string/note_body_hint"
+        android:paddingLeft="24dp"
+        android:paddingRight="24dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="24dp"
         android:scrollbars="vertical"
         android:gravity="top"
-        android:lineSpacingExtra="8dp"
-        android:textSize="18sp"
-        android:inputType="textCapSentences|textMultiLine" />
+        android:lineSpacingExtra="7dp"
+        android:textColor="#33373D"
+        android:textSize="17sp"
+        android:inputType="textCapSentences|textMultiLine"
+        android:saveEnabled="false">
+        <requestFocus />
+    </EditText>
 </LinearLayout>

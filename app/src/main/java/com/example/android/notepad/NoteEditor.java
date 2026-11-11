@@ -17,26 +17,31 @@
 package com.example.android.notepad;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.ContentValues;
-import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.Context;
 import android.database.Cursor;
 import android.graphics.Canvas;
 import android.graphics.Paint;
-import android.graphics.Rect;
+import android.graphics.Path;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
 import android.text.Editable;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.util.AttributeSet;
 import android.util.Log;
-import android.view.Menu;
-import android.view.MenuItem;
+import android.view.View;
 import android.widget.EditText;
 import android.widget.Toast;
+import android.widget.TextView;
+
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.Locale;
+import java.util.TimeZone;
 
 /** A single editor for blank notes, clipboard drafts and saved notes. */
 public class NoteEditor extends Activity {
@@ -51,28 +56,59 @@ public class NoteEditor extends Activity {
     private boolean mIsNewNote;
     private boolean mDiscarded;
     private boolean mLoaded;
-    private String mOriginalTitle = "";
-    private String mOriginalText = "";
-    private long mOriginalModified;
+    private boolean mApplyingHistory;
+    private long mMetadataTime;
+    private final ArrayList<Bundle> mUndo = new ArrayList<Bundle>();
+    private final ArrayList<Bundle> mRedo = new ArrayList<Bundle>();
+    private final Handler mClock = new Handler();
+    private final Runnable mRefreshTime = new Runnable() {
+        @Override public void run() {
+            if (mIsNewNote && !hasContent()) mMetadataTime = System.currentTimeMillis();
+            updateEditorUi();
+            mClock.postDelayed(this, 60000);
+        }
+    };
 
-    public static class LinedEditText extends EditText {
-        private final Rect mRect = new Rect();
-        private final Paint mPaint = new Paint();
+    /** Small line icons keep the toolbar consistent on this project's older Android APIs. */
+    public static class EditorActionView extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Path path = new Path();
 
-        public LinedEditText(Context context, AttributeSet attrs) {
+        public EditorActionView(Context context, AttributeSet attrs) {
             super(context, attrs);
-            mPaint.setStyle(Paint.Style.STROKE);
-            mPaint.setColor(0xFFE6EAF0);
+            setClickable(true);
+            setFocusable(true);
         }
 
-        @Override
-        protected void onDraw(Canvas canvas) {
-            for (int i = 0; i < getLineCount(); i++) {
-                int baseline = getLineBounds(i, mRect);
-                canvas.drawLine(mRect.left, baseline + 6, getWidth() - getPaddingRight(),
-                        baseline + 6, mPaint);
-            }
+        @Override public void setEnabled(boolean enabled) {
+            super.setEnabled(enabled);
+            invalidate();
+        }
+
+        @Override protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
+            float scale = 26 * getResources().getDisplayMetrics().density / 24;
+            canvas.save();
+            canvas.translate((getWidth() - 24 * scale) / 2, (getHeight() - 24 * scale) / 2);
+            canvas.scale(scale, scale);
+            paint.setColor(isEnabled() ? 0xFF42474D : 0xFFC8CBCF);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(2);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+            path.reset();
+            if (getId() == R.id.editor_back) {
+                path.moveTo(15, 4); path.lineTo(7, 12); path.lineTo(15, 20);
+            } else if (getId() == R.id.editor_save) {
+                path.moveTo(4, 12); path.lineTo(10, 18); path.lineTo(21, 6);
+            } else {
+                if (getId() == R.id.editor_redo) { canvas.translate(24, 0); canvas.scale(-1, 1); }
+                path.moveTo(4, 8); path.lineTo(14, 8);
+                path.cubicTo(23, 8, 23, 20, 13, 20);
+                path.moveTo(9, 3); path.lineTo(4, 8); path.lineTo(9, 13);
+            }
+            canvas.drawPath(path, paint);
+            canvas.restore();
         }
     }
 
@@ -82,15 +118,29 @@ public class NoteEditor extends Activity {
         setContentView(R.layout.note_editor);
         mTitle = (EditText) findViewById(R.id.note_title);
         mText = (EditText) findViewById(R.id.note);
-        if (getActionBar() != null) getActionBar().setDisplayHomeAsUpEnabled(true);
+        mMetadataTime = System.currentTimeMillis();
+        findViewById(R.id.editor_back).setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { onBackPressed(); }
+        });
+        findViewById(R.id.editor_save).setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { if (saveNote(true)) finish(); }
+        });
+        findViewById(R.id.editor_undo).setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { moveHistory(mUndo, mRedo); }
+        });
+        findViewById(R.id.editor_redo).setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { moveHistory(mRedo, mUndo); }
+        });
 
         if (state != null) {
             String uri = state.getString("note_uri");
             mUri = uri == null ? null : Uri.parse(uri);
             mIsNewNote = state.getBoolean("new_note");
-            mOriginalTitle = state.getString("original_title", "");
-            mOriginalText = state.getString("original_text", "");
-            mOriginalModified = state.getLong("original_modified");
+            mMetadataTime = state.getLong("metadata_time", mMetadataTime);
+            ArrayList<Bundle> undo = state.getParcelableArrayList("undo_history");
+            ArrayList<Bundle> redo = state.getParcelableArrayList("redo_history");
+            if (undo != null) mUndo.addAll(undo);
+            if (redo != null) mRedo.addAll(redo);
             mTitle.setText(state.getString("draft_title", ""));
             mText.setText(state.getString("draft_text", ""));
             mLoaded = true;
@@ -127,15 +177,104 @@ public class NoteEditor extends Activity {
             return;
         }
         setTitle(mIsNewNote ? R.string.title_create : R.string.title_edit);
-        TextWatcher watcher = new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
-            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
-                invalidateOptionsMenu();
+        watchEdits(mTitle);
+        watchEdits(mText);
+        if (state != null && state.getBoolean("title_focused")) mTitle.requestFocus();
+        else mText.requestFocus();
+        if (state != null) {
+            setSelection(mTitle, state.getInt("title_start"), state.getInt("title_end"));
+            setSelection(mText, state.getInt("body_start"), state.getInt("body_end"));
+        }
+        updateEditorUi();
+    }
+
+    private Bundle captureEdit() {
+        Bundle state = new Bundle();
+        state.putString("title", mTitle.getText().toString());
+        state.putString("body", mText.getText().toString());
+        state.putBoolean("title_focused", mTitle.hasFocus());
+        state.putInt("title_start", mTitle.getSelectionStart());
+        state.putInt("title_end", mTitle.getSelectionEnd());
+        state.putInt("body_start", mText.getSelectionStart());
+        state.putInt("body_end", mText.getSelectionEnd());
+        return state;
+    }
+
+    private void watchEdits(EditText field) {
+        field.addTextChangedListener(new TextWatcher() {
+            private Bundle before;
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+                if (!mApplyingHistory) before = captureEdit();
             }
-            @Override public void afterTextChanged(Editable value) { }
-        };
-        mTitle.addTextChangedListener(watcher);
-        mText.addTextChangedListener(watcher);
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { }
+            @Override public void afterTextChanged(Editable value) {
+                if (mApplyingHistory || before == null) return;
+                if (!TextUtils.equals(before.getString("title"), mTitle.getText())
+                        || !TextUtils.equals(before.getString("body"), mText.getText())) {
+                    mUndo.add(before);
+                    if (mUndo.size() > 100) mUndo.remove(0);
+                    mRedo.clear();
+                    mMetadataTime = System.currentTimeMillis();
+                    updateEditorUi();
+                }
+                before = null;
+            }
+        });
+    }
+
+    private static void setSelection(EditText field, int start, int end) {
+        int length = field.length();
+        field.setSelection(Math.max(0, Math.min(start, length)),
+                Math.max(0, Math.min(end, length)));
+    }
+
+    private void moveHistory(ArrayList<Bundle> from, ArrayList<Bundle> to) {
+        if (from.isEmpty()) return;
+        to.add(captureEdit());
+        Bundle previous = from.remove(from.size() - 1);
+        mApplyingHistory = true;
+        try {
+            mTitle.setText(previous.getString("title", ""));
+            mText.setText(previous.getString("body", ""));
+            if (previous.getBoolean("title_focused")) mTitle.requestFocus();
+            else mText.requestFocus();
+            setSelection(mTitle, previous.getInt("title_start"), previous.getInt("title_end"));
+            setSelection(mText, previous.getInt("body_start"), previous.getInt("body_end"));
+        } finally { mApplyingHistory = false; }
+        mMetadataTime = System.currentTimeMillis();
+        updateEditorUi();
+    }
+
+    private void updateEditorUi() {
+        if (!mLoaded) return;
+        findViewById(R.id.editor_undo).setEnabled(!mUndo.isEmpty());
+        findViewById(R.id.editor_redo).setEnabled(!mRedo.isEmpty());
+        findViewById(R.id.editor_save).setEnabled(!mIsNewNote || hasContent());
+        int count = 0;
+        String body = mText.getText().toString();
+        for (int offset = 0; offset < body.length();) {
+            int codePoint = body.codePointAt(offset);
+            if (!Character.isWhitespace(codePoint) && !Character.isSpaceChar(codePoint)) count++;
+            offset += Character.charCount(codePoint);
+        }
+        SimpleDateFormat format = new SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.CHINA);
+        format.setTimeZone(TimeZone.getTimeZone("Asia/Shanghai"));
+        String date = format.format(new Date(mMetadataTime));
+        ((TextView) findViewById(R.id.editor_metadata)).setText(
+                getString(R.string.editor_metadata, date, count));
+    }
+
+    // Keep recreation state bounded; the most recent steps are the most useful ones.
+    private ArrayList<Bundle> savedHistory(ArrayList<Bundle> history) {
+        ArrayList<Bundle> result = new ArrayList<Bundle>();
+        int characters = 0;
+        for (int i = history.size() - 1; i >= 0 && result.size() < 20; i--) {
+            Bundle state = history.get(i);
+            characters += state.getString("title", "").length() + state.getString("body", "").length();
+            if (characters > 20000) break;
+            result.add(0, state);
+        }
+        return result;
     }
 
     private void loadNote() {
@@ -143,13 +282,10 @@ public class NoteEditor extends Activity {
         Cursor cursor = getContentResolver().query(mUri, PROJECTION, null, null, null);
         try {
             if (cursor != null && cursor.moveToFirst()) {
-                mOriginalTitle = cursor.getString(0);
-                mOriginalText = cursor.getString(1);
-                if (mOriginalTitle == null) mOriginalTitle = "";
-                if (mOriginalText == null) mOriginalText = "";
-                mOriginalModified = cursor.getLong(2);
-                mTitle.setText(isLegacyTitle(mOriginalTitle) ? "" : mOriginalTitle);
-                mText.setText(mOriginalText);
+                String title = cursor.getString(0);
+                mMetadataTime = cursor.getLong(2);
+                mTitle.setText(isLegacyTitle(title) ? "" : title);
+                mText.setText(cursor.getString(1));
                 mLoaded = true;
             }
         } finally {
@@ -161,16 +297,6 @@ public class NoteEditor extends Activity {
         return "<Untitled>".equalsIgnoreCase(title);
     }
 
-    private String resolvedTitle() {
-        String title = mTitle.getText().toString().trim();
-        if (!TextUtils.isEmpty(title)) return title;
-        String body = mText.getText().toString().trim();
-        if (TextUtils.isEmpty(body)) return getString(R.string.untitled_note);
-        int newline = body.indexOf('\n');
-        if (newline >= 0) body = body.substring(0, newline);
-        return body.substring(0, Math.min(30, body.length()));
-    }
-
     private boolean hasContent() {
         return !TextUtils.isEmpty(mTitle.getText().toString().trim())
                 || !TextUtils.isEmpty(mText.getText().toString().trim());
@@ -178,19 +304,20 @@ public class NoteEditor extends Activity {
 
     private boolean saveNote(boolean feedback) {
         if (!mLoaded || mDiscarded) return false;
-        if (mIsNewNote && !hasContent()) {
-            // If an autosaved new draft was cleared, do not leave its old content behind.
-            if (mUri != null) {
-                getContentResolver().delete(mUri, null, null);
-                mUri = null;
-                setResult(RESULT_CANCELED);
-            }
-            if (feedback) Toast.makeText(this, R.string.empty_note_hint, Toast.LENGTH_SHORT).show();
-            return false;
-        }
-        String title = resolvedTitle();
-        String body = mText.getText().toString();
         try {
+            if (mIsNewNote && !hasContent()) {
+                // If an autosaved new draft was cleared, do not leave its old content behind.
+                if (mUri != null) {
+                    getContentResolver().delete(mUri, null, null);
+                    mUri = null;
+                    setResult(RESULT_CANCELED);
+                }
+                if (feedback) Toast.makeText(this, R.string.empty_note_hint, Toast.LENGTH_SHORT).show();
+                return true;
+            }
+            // An optional title stays empty; the list derives a display summary from the body.
+            String title = mTitle.getText().toString().trim();
+            String body = mText.getText().toString();
             boolean changed = true;
             if (mUri != null) {
                 Cursor cursor = getContentResolver().query(mUri, PROJECTION, null, null, null);
@@ -232,8 +359,20 @@ public class NoteEditor extends Activity {
         }
     }
 
+    @Override protected void onResume() {
+        super.onResume();
+        mClock.removeCallbacks(mRefreshTime);
+        mClock.post(mRefreshTime);
+    }
+
+    @Override protected void onDestroy() {
+        mClock.removeCallbacks(mRefreshTime);
+        super.onDestroy();
+    }
+
     @Override
     protected void onPause() {
+        mClock.removeCallbacks(mRefreshTime);
         if (!mDiscarded) saveNote(false);
         super.onPause();
     }
@@ -244,83 +383,21 @@ public class NoteEditor extends Activity {
         saveNote(false);
         state.putString("note_uri", mUri == null ? null : mUri.toString());
         state.putBoolean("new_note", mIsNewNote);
-        state.putString("original_title", mOriginalTitle);
-        state.putString("original_text", mOriginalText);
-        state.putLong("original_modified", mOriginalModified);
+        state.putLong("metadata_time", mMetadataTime);
+        state.putParcelableArrayList("undo_history", savedHistory(mUndo));
+        state.putParcelableArrayList("redo_history", savedHistory(mRedo));
+        state.putBoolean("title_focused", mTitle.hasFocus());
+        state.putInt("title_start", mTitle.getSelectionStart());
+        state.putInt("title_end", mTitle.getSelectionEnd());
+        state.putInt("body_start", mText.getSelectionStart());
+        state.putInt("body_end", mText.getSelectionEnd());
         state.putString("draft_title", mTitle.getText().toString());
         state.putString("draft_text", mText.getText().toString());
         super.onSaveInstanceState(state);
     }
 
     @Override
-    public boolean onCreateOptionsMenu(Menu menu) {
-        getMenuInflater().inflate(R.menu.editor_options_menu, menu);
-        return true;
-    }
-
-    @Override
-    public boolean onPrepareOptionsMenu(Menu menu) {
-        menu.findItem(R.id.menu_delete).setVisible(!mIsNewNote);
-        menu.findItem(R.id.menu_revert).setTitle(mIsNewNote
-                ? R.string.menu_discard_new : R.string.menu_revert);
-        return super.onPrepareOptionsMenu(menu);
-    }
-
-    @Override
     public void onBackPressed() {
-        if (mDiscarded || (mIsNewNote && !hasContent()) || saveNote(false)) {
-            finish();
-        }
-    }
-
-    @Override
-    public boolean onOptionsItemSelected(MenuItem item) {
-        int id = item.getItemId();
-        if (id == android.R.id.home) {
-            onBackPressed();
-            return true;
-        } else if (id == R.id.menu_save) {
-            if (saveNote(true)) finish();
-            return true;
-        } else if (id == R.id.menu_delete) {
-            new AlertDialog.Builder(this).setTitle(R.string.delete_note_title)
-                    .setMessage(R.string.delete_note_message)
-                    .setNegativeButton(R.string.button_cancel, null)
-                    .setPositiveButton(R.string.button_delete, new DialogInterface.OnClickListener() {
-                        @Override public void onClick(DialogInterface dialog, int which) {
-                            if (mUri != null) getContentResolver().delete(mUri, null, null);
-                            mDiscarded = true;
-                            finish();
-                        }
-                    }).show();
-            return true;
-        } else if (id == R.id.menu_revert) {
-            new AlertDialog.Builder(this).setTitle(mIsNewNote
-                    ? R.string.menu_discard_new : R.string.menu_revert)
-                    .setMessage(mIsNewNote ? R.string.discard_new_message
-                            : R.string.discard_changes_message)
-                    .setNegativeButton(R.string.button_cancel, null)
-                    .setPositiveButton(R.string.button_discard, new DialogInterface.OnClickListener() {
-                        @Override public void onClick(DialogInterface dialog, int which) {
-                            if (mUri != null) {
-                                if (mIsNewNote) {
-                                    getContentResolver().delete(mUri, null, null);
-                                } else {
-                                    ContentValues values = new ContentValues();
-                                    values.put(NotePad.Notes.COLUMN_NAME_TITLE, mOriginalTitle);
-                                    values.put(NotePad.Notes.COLUMN_NAME_NOTE, mOriginalText);
-                                    values.put(NotePad.Notes.COLUMN_NAME_MODIFICATION_DATE,
-                                            mOriginalModified);
-                                    getContentResolver().update(mUri, values, null, null);
-                                }
-                            }
-                            mDiscarded = true;
-                            setResult(RESULT_CANCELED);
-                            finish();
-                        }
-                    }).show();
-            return true;
-        }
-        return super.onOptionsItemSelected(item);
+        if (mDiscarded || saveNote(false)) finish();
     }
 }

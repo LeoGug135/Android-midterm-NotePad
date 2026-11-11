@@ -188,7 +188,7 @@ public class NotePadChineseFlowTest extends ActivityInstrumentationTestCase2<Not
         assertEquals("新建笔记", editor.getTitle());
         assertNotNull(editor.findViewById(R.id.note_title));
         screenshot("中文空白新建");
-        getInstrumentation().invokeMenuActionSync(editor, R.id.menu_save, 0);
+        clickEditor(R.id.editor_save);
         assertEquals(before, countAll());
         closeEditor();
         assertEquals(before, countAll());
@@ -211,7 +211,7 @@ public class NotePadChineseFlowTest extends ActivityInstrumentationTestCase2<Not
         });
         edit(prefix + "剪贴板笔记", "来自剪贴板的正文");
         screenshot("中文剪贴板新建");
-        getInstrumentation().invokeMenuActionSync(editor, R.id.menu_save, 0);
+        clickEditor(R.id.editor_save);
         getInstrumentation().waitForIdleSync();
         assertOwnCount(1);
         getInstrumentation().runOnMainSync(new Runnable() {
@@ -241,58 +241,83 @@ public class NotePadChineseFlowTest extends ActivityInstrumentationTestCase2<Not
         recreateEditor();
         assertEquals("新建笔记", editor.getTitle());
         assertOwnCount(1);
-        getInstrumentation().invokeMenuActionSync(editor, R.id.menu_save, 0);
+        clickEditor(R.id.editor_save);
         getInstrumentation().waitForIdleSync();
         assertOwnCount(1);
     }
 
-    public void testDiscardNewDraftAfterAutomaticSave() {
+    private void clickEditor(final int id) {
+        getInstrumentation().runOnMainSync(new Runnable() {
+            @Override public void run() { editor.findViewById(id).performClick(); }
+        });
+        getInstrumentation().waitForIdleSync();
+    }
+
+    public void testUndoNewDraftAfterAutomaticSaveLeavesNoEmptyRow() {
         open(newIntent(Intent.ACTION_INSERT));
-        edit(prefix + "临时草稿", "放弃后不保留");
+        edit(prefix + "临时草稿", "撤销后不保留");
         recreateEditor();
         assertOwnCount(1);
-        getInstrumentation().invokeMenuActionSync(editor, R.id.menu_revert, 0);
-        clickDialogButton("放弃");
+        clickEditor(R.id.editor_undo);
+        clickEditor(R.id.editor_undo);
+        clickEditor(R.id.editor_back);
         assertOwnCount(0);
     }
 
-    public void testDeleteRequiresConfirmationAndCancelPreservesNote() {
+    public void testBackSavesExistingNoteAndNoExtraEditorMenu() {
         ContentValues values = new ContentValues();
-        values.put(NotePad.Notes.COLUMN_NAME_TITLE, prefix + "删除验证");
+        values.put(NotePad.Notes.COLUMN_NAME_TITLE, prefix + "返回验证");
         values.put(NotePad.Notes.COLUMN_NAME_NOTE, "测试内容");
         Uri uri = list.getContentResolver().insert(NotePad.Notes.CONTENT_URI, values);
         open(new Intent(Intent.ACTION_EDIT, uri, list, NoteEditor.class));
         assertEquals("编辑笔记", editor.getTitle());
-        getInstrumentation().invokeMenuActionSync(editor, R.id.menu_delete, 0);
-        assertOwnCount(1);
-        clickDialogButton("取消");
-        assertOwnCount(1);
-        getInstrumentation().invokeMenuActionSync(editor, R.id.menu_delete, 0);
-        clickDialogButton("删除");
-        assertOwnCount(0);
-    }
-
-    public void testDiscardExistingRestoresTitleBodyAndTimestamp() {
-        ContentValues values = new ContentValues();
-        values.put(NotePad.Notes.COLUMN_NAME_TITLE, prefix + "原始标题");
-        values.put(NotePad.Notes.COLUMN_NAME_NOTE, "原始正文");
-        values.put(NotePad.Notes.COLUMN_NAME_MODIFICATION_DATE, 1609459200000L);
-        Uri uri = list.getContentResolver().insert(NotePad.Notes.CONTENT_URI, values);
-        open(new Intent(Intent.ACTION_EDIT, uri, list, NoteEditor.class));
-        edit(prefix + "修改后标题", "修改后正文");
-        recreateEditor();
-        getInstrumentation().invokeMenuActionSync(editor, R.id.menu_revert, 0);
-        clickDialogButton("放弃");
+        getInstrumentation().runOnMainSync(new Runnable() {
+            @Override public void run() {
+                PopupMenu popup = new PopupMenu(editor, editor.findViewById(R.id.note));
+                editor.onCreateOptionsMenu(popup.getMenu());
+                assertEquals(0, popup.getMenu().size());
+            }
+        });
+        edit(prefix + "返回验证", "返回时保存的内容");
+        clickEditor(R.id.editor_back);
         Cursor cursor = ownNotes();
         try {
             assertEquals(1, cursor.getCount());
             assertTrue(cursor.moveToFirst());
-            assertEquals(prefix + "原始标题", cursor.getString(
-                    cursor.getColumnIndexOrThrow(NotePad.Notes.COLUMN_NAME_TITLE)));
-            assertEquals("原始正文", cursor.getString(
+            assertEquals("返回时保存的内容", cursor.getString(
                     cursor.getColumnIndexOrThrow(NotePad.Notes.COLUMN_NAME_NOTE)));
-            assertEquals(1609459200000L, cursor.getLong(
-                    cursor.getColumnIndexOrThrow(NotePad.Notes.COLUMN_NAME_MODIFICATION_DATE)));
+        } finally { cursor.close(); }
+    }
+
+    public void testUndoRedoExistingTitleAndBodyAfterRecreation() {
+        ContentValues values = new ContentValues();
+        values.put(NotePad.Notes.COLUMN_NAME_TITLE, prefix + "原始标题");
+        values.put(NotePad.Notes.COLUMN_NAME_NOTE, "原始正文");
+        Uri uri = list.getContentResolver().insert(NotePad.Notes.CONTENT_URI, values);
+        open(new Intent(Intent.ACTION_EDIT, uri, list, NoteEditor.class));
+        edit(prefix + "修改后标题", "修改后正文");
+        recreateEditor();
+        clickEditor(R.id.editor_undo);
+        clickEditor(R.id.editor_undo);
+        getInstrumentation().runOnMainSync(new Runnable() {
+            @Override public void run() {
+                assertEquals(prefix + "原始标题", ((EditText) editor.findViewById(
+                        R.id.note_title)).getText().toString());
+                assertEquals("原始正文", ((EditText) editor.findViewById(
+                        R.id.note)).getText().toString());
+            }
+        });
+        clickEditor(R.id.editor_redo);
+        clickEditor(R.id.editor_redo);
+        clickEditor(R.id.editor_save);
+        Cursor cursor = ownNotes();
+        try {
+            assertEquals(1, cursor.getCount());
+            assertTrue(cursor.moveToFirst());
+            assertEquals(prefix + "修改后标题", cursor.getString(
+                    cursor.getColumnIndexOrThrow(NotePad.Notes.COLUMN_NAME_TITLE)));
+            assertEquals("修改后正文", cursor.getString(
+                    cursor.getColumnIndexOrThrow(NotePad.Notes.COLUMN_NAME_NOTE)));
         } finally { cursor.close(); }
     }
 }

@@ -60,7 +60,11 @@
     <string name="button_delete">删除</string>
     <string name="button_discard">放弃</string>
     <string name="text_title">标题：</string>
-    <string name="note_title_hint">笔记标题（可选）</string>
+    <string name="note_title_hint">标题</string>
+    <string name="editor_back">返回并保存</string>
+    <string name="editor_undo">撤销</string>
+    <string name="editor_redo">重做</string>
+    <string name="editor_metadata">%1$s  |  %2$d 字</string>
     <string name="note_body_hint">写下你的想法…</string>
     <string name="editor_save_hint">返回时自动保存，也可以点击右上角“保存”</string>
     <string name="clipboard_empty">剪贴板中没有可用的文字</string>

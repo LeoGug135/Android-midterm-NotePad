@@ -52,6 +52,7 @@
         </activity>
 
         <activity android:name="NoteEditor"
+            android:theme="@style/EditorTheme"
             android:windowSoftInputMode="adjustResize"
             android:screenOrientation="sensor"
             android:configChanges="keyboardHidden|orientation"

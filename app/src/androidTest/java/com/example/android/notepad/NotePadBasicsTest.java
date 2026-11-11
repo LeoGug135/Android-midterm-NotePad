@@ -20,6 +20,7 @@ import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.TimeZone;
 import java.util.Set;
 
 /** Exercises the real provider, list, search widget and editor without deleting user notes. */
@@ -146,8 +147,9 @@ public class NotePadBasicsTest extends ActivityInstrumentationTestCase2<NotesLis
             @Override public void run() {
                 android.view.View row = activity.getListAdapter().getView(
                         0, null, activity.getListView());
-                String formatted = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-                        .format(new Date(timestamp));
+                SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA);
+                format.setTimeZone(TimeZone.getTimeZone("Asia/Shanghai"));
+                String formatted = format.format(new Date(timestamp));
                 assertEquals(activity.getString(R.string.note_updated_at, formatted),
                         ((TextView) row.findViewById(android.R.id.text2)).getText().toString());
             }

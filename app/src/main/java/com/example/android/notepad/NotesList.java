@@ -52,6 +52,7 @@ import java.util.Date;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
+import java.util.TimeZone;
 
 /** Searchable notes with stable-ID selection and a persisted sort order. */
 public class NotesList extends ListActivity implements LoaderManager.LoaderCallbacks<Cursor> {
@@ -60,7 +61,7 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
     private static final String SORT_PREFERENCE = "sort_order";
     private static final String[] PROJECTION = {
             NotePad.Notes._ID, NotePad.Notes.COLUMN_NAME_TITLE,
-            NotePad.Notes.COLUMN_NAME_MODIFICATION_DATE
+            NotePad.Notes.COLUMN_NAME_MODIFICATION_DATE, NotePad.Notes.COLUMN_NAME_NOTE
     };
     private static final String[] SORT_ORDERS = {
             "modified DESC, _id DESC", "modified ASC, _id ASC",
@@ -93,7 +94,8 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
             long[] ids = state.getLongArray("selected_ids");
             if (ids != null) for (long id : ids) mSelectedIds.add(id);
         }
-        final SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault());
+        final SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA);
+        format.setTimeZone(TimeZone.getTimeZone("Asia/Shanghai"));
         mAdapter = new SimpleCursorAdapter(this, R.layout.noteslist_item, null,
                 new String[] { NotePad.Notes.COLUMN_NAME_TITLE,
                         NotePad.Notes.COLUMN_NAME_MODIFICATION_DATE },
@@ -117,7 +119,15 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
                     return true;
                 } else if (view.getId() == android.R.id.text1) {
                     String title = cursor.getString(column);
-                    ((TextView) view).setText(TextUtils.isEmpty(title) || NoteEditor.isLegacyTitle(title)
+                    if (TextUtils.isEmpty(title) || NoteEditor.isLegacyTitle(title)) {
+                        String body = cursor.getString(cursor.getColumnIndexOrThrow(
+                                NotePad.Notes.COLUMN_NAME_NOTE));
+                        title = body == null ? "" : body.trim();
+                        int newline = title.indexOf('\n');
+                        if (newline >= 0) title = title.substring(0, newline);
+                        title = title.substring(0, Math.min(30, title.length()));
+                    }
+                    ((TextView) view).setText(TextUtils.isEmpty(title)
                             ? getString(R.string.untitled_note) : title);
                     return true;
                 }
