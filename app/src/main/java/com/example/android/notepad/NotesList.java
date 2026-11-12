@@ -66,11 +66,12 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
     private static final String[] PROJECTION = {
             NotePad.Notes._ID, NotePad.Notes.COLUMN_NAME_TITLE,
             NotePad.Notes.COLUMN_NAME_MODIFICATION_DATE, NotePad.Notes.COLUMN_NAME_NOTE,
-            "pinned", "background", "category_id", "deleted_at"
+            "pinned", "background", "category_id", "deleted_at", NoteFeatures.IMPORTANCE
     };
     private static final String[] SORT_ORDERS = {
             "modified DESC, _id DESC", "modified ASC, _id ASC",
-            "created DESC, _id DESC", "created ASC, _id ASC"
+            "created DESC, _id DESC", "created ASC, _id ASC",
+            "importance DESC, modified DESC, _id DESC"
     };
     private final Set<Long> mSelectedIds = new HashSet<Long>();
     private SimpleCursorAdapter mAdapter;
@@ -546,6 +547,7 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
     }
 
     private void closeActions() {
+        mDialogs.dismissMoreMenu();
         if (mOpenNote != -1) { mOpenNote = -1; mAdapter.notifyDataSetChanged(); }
     }
 
@@ -553,6 +555,13 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
         final long id = cursor.getLong(cursor.getColumnIndexOrThrow("_id"));
         final boolean pinned = cursor.getInt(cursor.getColumnIndexOrThrow("pinned")) != 0;
         final long category = cursor.getLong(cursor.getColumnIndexOrThrow("category_id"));
+        final int importance = cursor.getInt(cursor.getColumnIndexOrThrow(NoteFeatures.IMPORTANCE));
+        TextView importanceLabel = (TextView) row.findViewById(R.id.note_importance);
+        importanceLabel.setVisibility(importance == 0 ? View.GONE : View.VISIBLE);
+        importanceLabel.setText(importance == 2 ? R.string.note_very_important_badge : R.string.note_important_badge);
+        importanceLabel.setTextColor(importance == 2 ? 0xFFC23B35 : 0xFF946000);
+        importanceLabel.setContentDescription(getString(R.string.note_importance_description,
+                getResources().getStringArray(R.array.note_importance_levels)[importance]));
         boolean selected = mSelectedIds.contains(id);
         CheckBox box = (CheckBox) row.findViewById(R.id.note_selected);
         box.setVisibility(mSelecting ? View.VISIBLE : View.GONE); box.setChecked(selected);
@@ -588,38 +597,51 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
         // INVISIBLE preserves the card's measured height while the buttons cover its content.
         card.setVisibility(actionsOpen ? View.INVISIBLE : View.VISIBLE);
         if (mTrash) {
-            addAction(actions, "restore", "恢复", new Runnable() {
-                @Override public void run() { restore(one(id)); }
+            addAction(actions, "restore", "恢复", new RowAction() {
+                @Override public void run(View anchor) { restore(one(id)); }
             });
-            addAction(actions, "delete", "彻底删除", new Runnable() {
-                @Override public void run() { confirmDelete(one(id)); }
+            addAction(actions, "delete", "彻底删除", new RowAction() {
+                @Override public void run(View anchor) { confirmDelete(one(id)); }
             });
         } else {
-            addAction(actions, pinned ? "unpin" : "pin", pinned ? "取消置顶" : "置顶", new Runnable() {
-                @Override public void run() {
+            addAction(actions, pinned ? "unpin" : "pin", pinned ? "取消置顶" : "置顶", new RowAction() {
+                @Override public void run(View anchor) {
                     ContentValues values = new ContentValues(); values.put("pinned", pinned ? 0 : 1);
                     updateNotes(one(id), values, false);
                 }
             });
-            addAction(actions, "tag", "标签", new Runnable() {
-                @Override public void run() { chooseCategory(one(id), category); }
+            addAction(actions, "tag", "标签", new RowAction() {
+                @Override public void run(View anchor) { chooseCategory(one(id), category); }
             });
-            addAction(actions, "delete", "删除", new Runnable() {
-                @Override public void run() { confirmDelete(one(id)); }
+            addAction(actions, "delete", "删除", new RowAction() {
+                @Override public void run(View anchor) { confirmDelete(one(id)); }
             });
-            addAction(actions, "more", "更多", new Runnable() {
-                @Override public void run() {
-                    mDialogs.items("更多操作", new String[] { "移动" }, new NoteDialogs.Choice() {
-                        @Override public void select(int index) { chooseCategory(one(id), category); }
+            addAction(actions, "more", "更多", new RowAction() {
+                @Override public void run(View anchor) {
+                    mDialogs.moreMenu(anchor, new NoteDialogs.Choice() {
+                        @Override public void select(int index) {
+                            if (index == 0) chooseCategory(one(id), category);
+                            else mDialogs.importancePicker(importance, new NoteDialogs.Choice() {
+                                @Override public void select(int level) {
+                                    if (level == importance) { closeActions(); return; }
+                                    ContentValues values = new ContentValues();
+                                    values.put(NoteFeatures.IMPORTANCE, level);
+                                    updateNotes(one(id), values, false);
+                                }
+                            });
+                        }
                     });
                 }
             });
         }
         row.setContentDescription(((TextView) row.findViewById(android.R.id.text1)).getText()
-                + "，" + status.getText() + "，向左滑动显示操作");
+                + "，" + status.getText() + (importance > 0 ? "，" + importanceLabel.getContentDescription() : "")
+                + "，向左滑动显示操作");
     }
 
-    private void addAction(LinearLayout parent, String icon, String label, final Runnable action) {
+    private interface RowAction { void run(View anchor); }
+
+    private void addAction(LinearLayout parent, String icon, String label, final RowAction action) {
         LinearLayout button = new LinearLayout(this);
         button.setOrientation(LinearLayout.VERTICAL); button.setGravity(Gravity.CENTER);
         button.setPadding(0, NoteFeatures.dp(this, 12), 0, NoteFeatures.dp(this, 10));
@@ -632,7 +654,7 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
         LinearLayout.LayoutParams caption = new LinearLayout.LayoutParams(-1, -2);
         caption.topMargin = NoteFeatures.dp(this, 6); button.addView(text, caption);
         button.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View view) { if (!mLoading) action.run(); }
+            @Override public void onClick(View view) { if (!mLoading) action.run(view); }
         });
         parent.addView(button, new LinearLayout.LayoutParams(0, -2, 1));
     }

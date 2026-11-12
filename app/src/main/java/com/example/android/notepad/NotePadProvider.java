@@ -63,7 +63,7 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
     /**
      * The database version
      */
-    private static final int DATABASE_VERSION = 3;
+    private static final int DATABASE_VERSION = 4;
 
     /**
      * A projection map used to select columns from the database
@@ -141,7 +141,7 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
         // Creates a new projection map instance. The map returns a column name
         // given a string. The two are usually equal.
         sNotesProjectionMap = new HashMap<String, String>();
-        for (String column : new String[] { "pinned", "background", "category_id", "deleted_at" }) {
+        for (String column : new String[] { "pinned", "background", "category_id", "deleted_at", "importance" }) {
             sNotesProjectionMap.put(column, column);
         }
 
@@ -207,7 +207,8 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
                    + "pinned INTEGER NOT NULL DEFAULT 0,"
                    + "background INTEGER NOT NULL DEFAULT 0,"
                    + "category_id INTEGER NOT NULL DEFAULT 0,"
-                   + "deleted_at INTEGER NOT NULL DEFAULT 0"
+                   + "deleted_at INTEGER NOT NULL DEFAULT 0,"
+                   + "importance INTEGER NOT NULL DEFAULT 0 CHECK (importance BETWEEN 0 AND 2)"
                    + ");");
            createCategories(db);
        }
@@ -226,12 +227,16 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
        public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
 
            // Upgrade the legacy schema in place: never discard existing notes.
-           if (oldVersion < 3) {
+           if (oldVersion < 3 && newVersion >= 3) {
                db.execSQL("ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
                db.execSQL("ALTER TABLE notes ADD COLUMN background INTEGER NOT NULL DEFAULT 0");
                db.execSQL("ALTER TABLE notes ADD COLUMN category_id INTEGER NOT NULL DEFAULT 0");
                db.execSQL("ALTER TABLE notes ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0");
                createCategories(db);
+           }
+           if (oldVersion < 4 && newVersion >= 4) {
+               db.execSQL("ALTER TABLE notes ADD COLUMN importance INTEGER NOT NULL DEFAULT 0 "
+                       + "CHECK (importance BETWEEN 0 AND 2)");
            }
        }
    }
@@ -554,6 +559,8 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
             values = new ContentValues();
         }
 
+        validateImportance(values);
+
         // Gets the current system time in milliseconds
         Long now = Long.valueOf(System.currentTimeMillis());
 
@@ -721,6 +728,16 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
      * @return The number of rows updated.
      * @throws IllegalArgumentException if the incoming URI pattern is invalid.
      */
+    private static void validateImportance(ContentValues values) {
+        if (values == null || !values.containsKey(NoteFeatures.IMPORTANCE)) return;
+        String raw = values.getAsString(NoteFeatures.IMPORTANCE);
+        try {
+            int level = Integer.parseInt(raw);
+            if (level >= 0 && level <= 2) return;
+        } catch (NumberFormatException error) { /* Reject null, fractional and nonnumeric values. */ }
+        throw new IllegalArgumentException("Importance must be an integer between 0 and 2");
+    }
+
     @Override
     public int update(Uri uri, ContentValues values, String where, String[] whereArgs) {
         if (sUriMatcher.match(uri) == CATEGORY_ID) {
@@ -730,6 +747,8 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
             return count;
         }
 
+
+        validateImportance(values);
 
         // Opens the database object in "write" mode.
         SQLiteDatabase db = mOpenHelper.getWritableDatabase();

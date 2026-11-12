@@ -12,6 +12,7 @@ import java.util.ArrayList;
 final class NoteFeatures {
     static final String PINNED = "pinned", BACKGROUND = "background";
     static final String CATEGORY = "category_id", DELETED = "deleted_at";
+    static final String IMPORTANCE = "importance";
     static final Uri CATEGORIES_URI = Uri.parse("content://" + NotePad.AUTHORITY + "/categories");
     static final Uri TRASH_URI = NotePad.Notes.CONTENT_URI.buildUpon()
             .appendQueryParameter("trash", "1").build();

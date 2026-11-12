@@ -7,6 +7,9 @@ import android.content.ContentUris;
 import android.content.ContentValues;
 import android.content.DialogInterface;
 import android.text.InputFilter;
+import android.graphics.Rect;
+import android.graphics.drawable.StateListDrawable;
+import android.os.Build;
 import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
@@ -14,6 +17,7 @@ import android.view.WindowManager;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.PopupWindow;
 import java.util.ArrayList;
 
 /** Small, lifecycle-owned sheets; category changes use the provider's transaction. */
@@ -21,6 +25,7 @@ final class NoteDialogs {
     interface Choice { void select(int index); }
     interface CategoryChoice { void select(long id); }
     private final Activity activity;
+    private PopupWindow morePopup;
     private final ArrayList<Dialog> dialogs = new ArrayList<Dialog>();
 
     NoteDialogs(Activity activity) { this.activity = activity; }
@@ -56,6 +61,79 @@ final class NoteDialogs {
                 .setItems(names, new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface dialog, int which) { callback.select(which); }
                 }).setNegativeButton("取消", null).create());
+    }
+
+    void dismissMoreMenu() {
+        if (morePopup != null) morePopup.dismiss();
+    }
+
+    void moreMenu(View anchor, final Choice callback) {
+        dismissMoreMenu();
+        LinearLayout content = new LinearLayout(activity);
+        content.setOrientation(LinearLayout.VERTICAL);
+        Rect frame = new Rect(); anchor.getWindowVisibleDisplayFrame(frame);
+        int margin = NoteFeatures.dp(activity, 16);
+        int width = Math.min(NoteFeatures.dp(activity, 196), frame.width() - margin * 2);
+        final PopupWindow popup = new PopupWindow(content, width,
+                WindowManager.LayoutParams.WRAP_CONTENT, true);
+        popup.setBackgroundDrawable(NoteFeatures.rounded(activity, 0xFFFFFFFF, 22));
+        popup.setOutsideTouchable(true);
+        popup.setInputMethodMode(PopupWindow.INPUT_METHOD_NOT_NEEDED);
+        if (Build.VERSION.SDK_INT >= 21) popup.setElevation(NoteFeatures.dp(activity, 14));
+        String[] labels = { "移动", activity.getString(R.string.note_importance_title) };
+        String[] icons = { "move", "importance" };
+        for (int i = 0; i < labels.length; i++) {
+            final int which = i;
+            LinearLayout item = new LinearLayout(activity);
+            item.setOrientation(LinearLayout.HORIZONTAL); item.setGravity(Gravity.CENTER_VERTICAL);
+            item.setPadding(NoteFeatures.dp(activity, 24), 0, NoteFeatures.dp(activity, 20), 0);
+            item.setContentDescription(labels[i]); item.setFocusable(true); item.setClickable(true);
+            StateListDrawable background = new StateListDrawable();
+            android.graphics.drawable.GradientDrawable pressed = NoteFeatures.rounded(activity, 0xFFF1F2F4, 22);
+            float radius = NoteFeatures.dp(activity, 22);
+            pressed.setCornerRadii(i == 0 ? new float[] {radius,radius,radius,radius,0,0,0,0}
+                    : new float[] {0,0,0,0,radius,radius,radius,radius});
+            background.addState(new int[] { android.R.attr.state_pressed }, pressed);
+            background.addState(new int[] { android.R.attr.state_focused }, pressed);
+            background.addState(new int[] {}, NoteFeatures.rounded(activity, 0x00000000, 0));
+            item.setBackgroundDrawable(background);
+            NoteIconView icon = new NoteIconView(activity); icon.setKind(icons[i]);
+            if (Build.VERSION.SDK_INT >= 16) icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            item.addView(icon, new LinearLayout.LayoutParams(NoteFeatures.dp(activity, 30), NoteFeatures.dp(activity, 30)));
+            TextView label = new TextView(activity); label.setText(labels[i]);
+            label.setTextSize(18); label.setTextColor(0xFF292C2E); label.setSingleLine(true);
+            if (Build.VERSION.SDK_INT >= 16) label.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            LinearLayout.LayoutParams text = new LinearLayout.LayoutParams(-2, -2);
+            text.leftMargin = NoteFeatures.dp(activity, 16); item.addView(label, text);
+            content.addView(item, new LinearLayout.LayoutParams(-1, NoteFeatures.dp(activity, 66)));
+            item.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) { popup.dismiss(); callback.select(which); }
+            });
+            if (i == 0) {
+                View divider = new View(activity); divider.setBackgroundColor(0xFFE7E8EA);
+                content.addView(divider, new LinearLayout.LayoutParams(-1, NoteFeatures.dp(activity, 0.5f)));
+            }
+        }
+        morePopup = popup;
+        popup.setOnDismissListener(new PopupWindow.OnDismissListener() {
+            @Override public void onDismiss() { if (morePopup == popup) morePopup = null; }
+        });
+        int[] location = new int[2]; anchor.getLocationOnScreen(location);
+        int left = Math.max(frame.left + margin,
+                Math.min(location[0] + anchor.getWidth() - width, frame.right - width - margin));
+        // Drop-down positioning follows the button and flips above it when space below is tight.
+        popup.showAsDropDown(anchor, left - location[0], NoteFeatures.dp(activity, 8));
+    }
+
+    void importancePicker(int current, final Choice callback) {
+        show(new AlertDialog.Builder(activity).setTitle(R.string.note_importance_title)
+                .setSingleChoiceItems(R.array.note_importance_levels, current,
+                        new DialogInterface.OnClickListener() {
+                            @Override public void onClick(DialogInterface dialog, int which) {
+                                dialog.dismiss();
+                                callback.select(which);
+                            }
+                        }).setNegativeButton(R.string.button_cancel, null).create());
     }
 
     void categoryPicker(long current, final CategoryChoice callback) {
@@ -189,6 +267,7 @@ final class NoteDialogs {
     }
 
     void destroy() {
+        dismissMoreMenu();
         for (Dialog dialog : new ArrayList<Dialog>(dialogs)) dialog.dismiss();
         dialogs.clear();
     }

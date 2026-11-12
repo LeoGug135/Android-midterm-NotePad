@@ -105,7 +105,9 @@ public class NotePadExtensionsTest extends ActivityInstrumentationTestCase2<Note
     private AccessibilityNodeInfo find(AccessibilityNodeInfo root, String label, boolean description) {
         if (root == null) return null;
         CharSequence value = description ? root.getContentDescription() : root.getText();
-        if (label.contentEquals(value == null ? "" : value) && root.isClickable()) return root;
+        if ((label.contentEquals(value == null ? "" : value)
+                || (!description && label.contentEquals(root.getContentDescription() == null
+                        ? "" : root.getContentDescription()))) && root.isClickable()) return root;
         for (int i = 0; i < root.getChildCount(); i++) {
             AccessibilityNodeInfo result = find(root.getChild(i), label, description);
             if (result != null) return result;
@@ -281,7 +283,7 @@ public class NotePadExtensionsTest extends ActivityInstrumentationTestCase2<Note
         tap("标签", true); tap(prefix + "学习");
         assertEquals(id, value(a, "category_id", false));
         awaitRows(a, b, c);
-        swipeFirst(true); tap("更多", true); tap("移动"); tap("未分类");
+        swipeFirst(true); tap("更多", true); screenshot("更多圆角悬浮菜单"); tap("移动"); tap("未分类");
         assertEquals(0, value(a, "category_id", false));
         update(a, "category_id", id); update(c, "category_id", id);
         scope(prefix + "学习"); awaitRows(a, c);
@@ -350,6 +352,137 @@ public class NotePadExtensionsTest extends ActivityInstrumentationTestCase2<Note
             assertEquals(NoteFeatures.COLORS[1], ((ColorDrawable) editor.findViewById(R.id.editor_root).getBackground()).getColor());
             editor.onBackPressed();
         }});
+        assertEquals(1609459200300L, value(a, "modified", false));
+    }
+
+    private void openImportance() {
+        swipeFirst(true); tap("更多", true); tap("重要度");
+    }
+
+    private void assertImportanceBadge(final int position, final String label) {
+        final int[] visibility = { -1 };
+        final String[] text = { null };
+        int expected = label == null ? View.GONE : View.VISIBLE;
+        long deadline = SystemClock.uptimeMillis() + 8000;
+        do {
+            main(new Runnable() { @Override public void run() {
+                if (position >= list.getListAdapter().getCount()) return;
+                View row = list.getListAdapter().getView(position, null, list.getListView());
+                TextView badge = (TextView) row.findViewById(R.id.note_importance);
+                visibility[0] = badge.getVisibility(); text[0] = badge.getText().toString();
+            }});
+            if (visibility[0] == expected && (label == null || label.equals(text[0]))) return;
+            SystemClock.sleep(60);
+        } while (SystemClock.uptimeMillis() < deadline);
+        assertEquals(expected, visibility[0]);
+        if (label != null) assertEquals(label, text[0]);
+    }
+
+    public void testImportanceMorePickerSaveCancelResetAndRecreate() throws Exception {
+        assertEquals(0, value(a, "importance", false)); assertImportanceBadge(0, null);
+        openImportance(); screenshot("重要度设置面板"); tap("非常重要"); awaitRows(a, b, c);
+        assertEquals(2, value(a, "importance", false)); assertImportanceBadge(0, "!! 非常重要");
+        assertEquals(1609459200300L, value(a, "modified", false));
+        update(b, "importance", 1); awaitRows(a, b, c);
+        assertImportanceBadge(1, "! 重要"); assertImportanceBadge(2, null);
+        screenshot("三级重要度列表");
+        openImportance();
+        AccessibilityNodeInfo selected = find(getInstrumentation().getUiAutomation().getRootInActiveWindow(), "非常重要", false);
+        assertNotNull(selected); assertTrue("Current importance must be checked", selected.isChecked());
+        tap("取消");
+        assertEquals(2, value(a, "importance", false));
+        main(new Runnable() { @Override public void run() { list.onBackPressed(); }});
+        Instrumentation.ActivityMonitor monitor = getInstrumentation().addMonitor(NotesList.class.getName(), null, false);
+        main(new Runnable() { @Override public void run() { list.recreate(); }});
+        list = (NotesList) getInstrumentation().waitForMonitorWithTimeout(monitor, 8000);
+        getInstrumentation().removeMonitor(monitor); assertNotNull(list); awaitRows(a, b, c);
+        assertImportanceBadge(0, "!! 非常重要");
+        openImportance(); tap("重要"); awaitRows(a, b, c);
+        assertEquals(1, value(a, "importance", false)); assertImportanceBadge(0, "! 重要");
+        openImportance(); tap("普通"); awaitRows(a, b, c);
+        assertEquals(0, value(a, "importance", false)); assertImportanceBadge(0, null);
+        assertEquals(1609459200300L, value(a, "modified", false));
+    }
+
+    public void testImportanceSortKeepsPinsFirstAndSurvivesFilterTrashRestore() throws Exception {
+        update(b, "importance", 1); update(c, "importance", 2); update(a, "pinned", 1);
+        // Importance does not change the existing time sort unless the user chooses it.
+        awaitRows(a, b, c);
+        getInstrumentation().invokeMenuActionSync(list, R.id.menu_sort, 0); tap("按重要度：高到低");
+        awaitRows(a, c, b); assertEquals(4, list.getPreferences(0).getInt("sort_order", -1));
+        update(b, "pinned", 1); awaitRows(b, a, c);
+        update(b, "pinned", 0); awaitRows(a, c, b);
+        long group = category(prefix + "重要度分类"); update(a, "category_id", group); update(c, "category_id", group);
+        scope(prefix + "重要度分类"); search(prefix); awaitRows(a, c);
+        search(prefix + "丙"); awaitRows(c); assertImportanceBadge(0, "!! 非常重要");
+        Instrumentation.ActivityMonitor monitor = getInstrumentation().addMonitor(NotesList.class.getName(), null, false);
+        main(new Runnable() { @Override public void run() { list.recreate(); }});
+        list = (NotesList) getInstrumentation().waitForMonitorWithTimeout(monitor, 8000);
+        getInstrumentation().removeMonitor(monitor); assertNotNull(list); awaitRows(c);
+        select(0); click(R.id.delete_selected); tap("删除"); awaitRows();
+        scope("最近删除"); search(prefix); awaitRows(c);
+        assertEquals(2, value(c, "importance", true)); assertImportanceBadge(0, "!! 非常重要");
+        select(0); click(R.id.restore_selected); awaitRows();
+        scope("全部"); search(prefix); awaitRows(a, c, b);
+        assertEquals(2, value(c, "importance", false));
+        assertEquals(1609459200100L, value(c, "modified", false));
+        getInstrumentation().invokeMenuActionSync(list, R.id.menu_sort, 0); tap("按修改时间：新到旧");
+        awaitRows(a, b, c);
+    }
+
+    public void testImportanceMigrationFromV2AndV3PreservesMetadataAndCategories() {
+        for (int oldVersion : new int[] { 2, 3 }) {
+            SQLiteDatabase db = SQLiteDatabase.create(null);
+            NotePadProvider.DatabaseHelper helper = new NotePadProvider.DatabaseHelper(getInstrumentation().getTargetContext());
+            try {
+                db.execSQL("CREATE TABLE notes (_id INTEGER PRIMARY KEY,title TEXT,note TEXT,created INTEGER,modified INTEGER)");
+                db.execSQL("INSERT INTO notes VALUES (17,'旧标题','中文正文',123,456)");
+                if (oldVersion == 3) {
+                    db.execSQL("ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
+                    db.execSQL("ALTER TABLE notes ADD COLUMN background INTEGER NOT NULL DEFAULT 0");
+                    db.execSQL("ALTER TABLE notes ADD COLUMN category_id INTEGER NOT NULL DEFAULT 0");
+                    db.execSQL("ALTER TABLE notes ADD COLUMN deleted_at INTEGER NOT NULL DEFAULT 0");
+                    db.execSQL("UPDATE notes SET pinned=1,background=4,category_id=7,deleted_at=9000");
+                    db.execSQL("CREATE TABLE categories (_id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE)");
+                    db.execSQL("INSERT INTO categories VALUES (7,'保留分类')");
+                }
+                helper.onUpgrade(db, oldVersion, 4);
+                Cursor cursor = db.rawQuery("SELECT * FROM notes WHERE _id=17", null);
+                try {
+                    assertTrue(cursor.moveToFirst()); assertEquals("旧标题", cursor.getString(cursor.getColumnIndexOrThrow("title")));
+                    assertEquals("中文正文", cursor.getString(cursor.getColumnIndexOrThrow("note")));
+                    assertEquals(123, cursor.getLong(cursor.getColumnIndexOrThrow("created")));
+                    assertEquals(456, cursor.getLong(cursor.getColumnIndexOrThrow("modified")));
+                    assertEquals(0, cursor.getInt(cursor.getColumnIndexOrThrow("importance")));
+                    if (oldVersion == 3) {
+                        assertEquals(1, cursor.getInt(cursor.getColumnIndexOrThrow("pinned")));
+                        assertEquals(4, cursor.getInt(cursor.getColumnIndexOrThrow("background")));
+                        assertEquals(7, cursor.getInt(cursor.getColumnIndexOrThrow("category_id")));
+                        assertEquals(9000, cursor.getLong(cursor.getColumnIndexOrThrow("deleted_at")));
+                    }
+                } finally { cursor.close(); }
+                if (oldVersion == 3) {
+                    Cursor category = db.rawQuery("SELECT name FROM categories WHERE _id=7", null);
+                    try { assertTrue(category.moveToFirst()); assertEquals("保留分类", category.getString(0)); }
+                    finally { category.close(); }
+                }
+            } finally { helper.close(); db.close(); }
+        }
+    }
+
+    public void testImportanceRejectsInvalidWritesWithoutChangingNotes() {
+        for (String invalid : new String[] { null, "-1", "3", "1.5", "abc" }) {
+            ContentValues values = new ContentValues();
+            if (invalid == null) values.putNull("importance"); else values.put("importance", invalid);
+            try { resolver.update(NoteFeatures.noteUri(a), values, null, null); fail("Accepted invalid importance: " + invalid); }
+            catch (IllegalArgumentException expected) { }
+            try {
+                Uri inserted = resolver.insert(NotePad.Notes.CONTENT_URI, values);
+                if (inserted != null) notes.add(inserted);
+                fail("Inserted invalid importance: " + invalid);
+            } catch (IllegalArgumentException expected) { }
+        }
+        assertEquals(0, value(a, "importance", false));
         assertEquals(1609459200300L, value(a, "modified", false));
     }
 

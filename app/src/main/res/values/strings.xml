@@ -31,7 +31,17 @@
         <item>按修改时间：旧到新</item>
         <item>按创建时间：新到旧</item>
         <item>按创建时间：旧到新</item>
+        <item>按重要度：高到低</item>
     </string-array>
+    <string name="note_importance_title">重要度</string>
+    <string-array name="note_importance_levels">
+        <item>普通</item>
+        <item>重要</item>
+        <item>非常重要</item>
+    </string-array>
+    <string name="note_important_badge">! 重要</string>
+    <string name="note_very_important_badge">!! 非常重要</string>
+    <string name="note_importance_description">重要度：%1$s</string>
     <string name="search_notes_hint">搜索标题或内容</string>
     <string name="note_updated_at">更新于：%1$s</string>
     <string name="notes_empty">暂无笔记，点击右上角按钮新建</string>

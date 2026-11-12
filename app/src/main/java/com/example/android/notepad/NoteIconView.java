@@ -41,6 +41,13 @@ public class NoteIconView extends View {
             path.moveTo(6, 6); path.lineTo(7, 21); path.lineTo(17, 21); path.lineTo(18, 6);
             path.moveTo(10, 10); path.lineTo(10, 17);
             path.moveTo(14, 10); path.lineTo(14, 17);
+        } else if ("move".equals(icon)) {
+            path.moveTo(3, 9); path.lineTo(13, 9); path.lineTo(13, 4);
+            path.lineTo(22, 12); path.lineTo(13, 20); path.lineTo(13, 15);
+            path.lineTo(3, 15); path.close();
+        } else if ("importance".equals(icon)) {
+            path.moveTo(12, 3); path.lineTo(22, 21); path.lineTo(2, 21); path.close();
+            path.moveTo(6, 14); path.lineTo(18, 14);
         } else if ("restore".equals(icon)) {
             path.moveTo(5, 10); path.cubicTo(8, 0, 22, 4, 21, 13);
             path.cubicTo(20, 22, 8, 23, 5, 16);
