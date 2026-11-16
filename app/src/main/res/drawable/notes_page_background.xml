@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The page receives focus to keep search from opening the keyboard on launch.
+     Define its focused appearance so Android does not draw a gray focus highlight
+     over the entire page when a hardware keyboard switches to non-touch mode. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true" android:drawable="@android:color/white" />
+    <item android:drawable="@android:color/white" />
+</selector>

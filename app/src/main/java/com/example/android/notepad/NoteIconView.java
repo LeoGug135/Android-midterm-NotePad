@@ -12,8 +12,10 @@ public class NoteIconView extends View {
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path path = new Path();
     private String kind = "more";
+    private int tint = 0xFF404346;
     public NoteIconView(Context context) { super(context); }
     public NoteIconView(Context context, AttributeSet attrs) { super(context, attrs); }
+    void setTint(int value) { tint = value; invalidate(); }
     void setKind(String value) { kind = value; invalidate(); }
 
     @Override protected void onDraw(Canvas canvas) {
@@ -23,10 +25,28 @@ public class NoteIconView extends View {
         float scale = NoteFeatures.dp(getContext(), 25) / 24f;
         canvas.translate((getWidth() - 24 * scale) / 2, (getHeight() - 24 * scale) / 2);
         canvas.scale(scale, scale);
-        paint.setColor(0xFF404346); paint.setStyle(Paint.Style.STROKE);
+        paint.setColor(tint); paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(1.8f); paint.setStrokeCap(Paint.Cap.ROUND); paint.setStrokeJoin(Paint.Join.ROUND);
         path.reset();
-        if ("pin".equals(icon) || "unpin".equals(icon)) {
+        if ("notes".equals(icon)) {
+            paint.setStyle(Paint.Style.FILL);
+            canvas.drawRoundRect(new android.graphics.RectF(4, 2, 20, 22), 3, 3, paint);
+            paint.setColor(0xFFFFFFFF); paint.setStyle(Paint.Style.STROKE);
+            canvas.drawLine(8, 7, 11, 7, paint);
+            canvas.drawLine(8, 12, 16, 12, paint);
+            canvas.drawLine(8, 17, 13, 17, paint);
+        } else if ("todo".equals(icon)) {
+            paint.setStyle(Paint.Style.FILL); canvas.drawCircle(12, 12, 10, paint);
+            paint.setStyle(Paint.Style.STROKE); paint.setColor(0xFFFFFFFF); paint.setStrokeWidth(2.5f);
+            path.moveTo(7.5f, 12); path.lineTo(10.5f, 15); path.lineTo(16.5f, 9);
+        } else if ("trash".equals(icon)) {
+            paint.setStyle(Paint.Style.FILL);
+            canvas.drawRoundRect(new android.graphics.RectF(6, 7, 18, 22), 2, 2, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            canvas.drawLine(4, 5, 20, 5, paint); canvas.drawLine(9, 2, 15, 2, paint);
+            paint.setColor(0xFFFFFFFF); paint.setStrokeWidth(1.5f);
+            canvas.drawLine(10, 10, 10, 18, paint); canvas.drawLine(14, 10, 14, 18, paint);
+        } else if ("pin".equals(icon) || "unpin".equals(icon)) {
             path.moveTo(5, 4); path.lineTo(19, 4);
             path.moveTo(12, 21); path.lineTo(12, 8);
             path.moveTo(5, 14); path.lineTo(12, 7); path.lineTo(19, 14);

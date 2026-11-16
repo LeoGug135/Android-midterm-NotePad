@@ -15,6 +15,7 @@ import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.EditText;
+import android.widget.AdapterView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.PopupWindow;
@@ -145,15 +146,27 @@ final class NoteDialogs {
             names[i + 1] = categories.get(i).name;
             if (categories.get(i).id == current) checked = i + 1;
         }
-        names[names.length - 1] = "＋ 新建分类";
-        show(new AlertDialog.Builder(activity).setTitle("选择分类")
+        names[names.length - 1] = "新建分类";
+        final AlertDialog picker = new AlertDialog.Builder(activity).setTitle("选择分类")
                 .setSingleChoiceItems(names, checked, new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface dialog, int which) {
                         dialog.dismiss();
                         if (which == categories.size() + 1) editCategory(null, callback);
                         else callback.select(which == 0 ? 0 : categories.get(which - 1).id);
                     }
-                }).setNegativeButton("取消", null).create());
+                }).setNegativeButton("取消", null).create();
+        show(picker);
+        final long previous = current;
+        attachCategoryDeletion(picker, categories, 1, new Runnable() {
+            @Override public void run() {
+                long next = 0;
+                for (NoteFeatures.Category value : NoteFeatures.categories(activity))
+                    if (value.id == previous) next = previous;
+                // An editor may still hold the deleted category in its draft metadata.
+                if (previous > 0 && next == 0) callback.select(0);
+                categoryPicker(next, callback);
+            }
+        });
     }
 
     void editCategory(final NoteFeatures.Category category, final CategoryChoice callback) {
@@ -227,41 +240,43 @@ final class NoteDialogs {
         });
     }
 
-    void manageCategories(final Runnable changed) {
+    void categoryScopes(final Choice callback, final Runnable changed) {
         final ArrayList<NoteFeatures.Category> categories = NoteFeatures.categories(activity);
-        String[] names = new String[categories.size() + 1];
-        for (int i = 0; i < categories.size(); i++) names[i] = categories.get(i).name;
-        names[categories.size()] = "＋ 新建分类";
-        items("管理分类", names, new Choice() {
-            @Override public void select(int index) {
-                if (index == categories.size()) {
-                    editCategory(null, new CategoryChoice() {
-                        @Override public void select(long id) { changed.run(); }
-                    });
-                    return;
-                }
+        String[] names = new String[categories.size() + 2];
+        names[0] = "全部"; names[1] = "未分类";
+        for (int i = 0; i < categories.size(); i++) names[i + 2] = categories.get(i).name;
+        final AlertDialog dialog = new AlertDialog.Builder(activity).setTitle("笔记分类")
+                .setItems(names, new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface value, int index) { callback.select(index); }
+                }).setNegativeButton("取消", null).create();
+        show(dialog);
+        attachCategoryDeletion(dialog, categories, 2, changed);
+    }
+
+    private void attachCategoryDeletion(final AlertDialog picker,
+            final ArrayList<NoteFeatures.Category> categories, final int offset, final Runnable changed) {
+        picker.getListView().setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {
+            @Override public boolean onItemLongClick(AdapterView<?> parent, View view, int position, long id) {
+                int index = position - offset;
+                // Built-in entries and the create action can never be deleted or selected by long press.
+                if (index < 0 || index >= categories.size()) return true;
                 final NoteFeatures.Category category = categories.get(index);
-                items(category.name, new String[] { "重命名", "删除分类" }, new Choice() {
-                    @Override public void select(int action) {
-                        if (action == 0) editCategory(category, new CategoryChoice() {
-                            @Override public void select(long id) { changed.run(); }
-                        });
-                        else show(new AlertDialog.Builder(activity).setTitle("删除分类？")
-                                .setMessage("其中的笔记将归入“未分类”，笔记内容会保留。")
-                                .setNegativeButton("取消", null).setPositiveButton("删除分类",
-                                        new DialogInterface.OnClickListener() {
-                                    @Override public void onClick(DialogInterface dialog, int which) {
-                                        try {
-                                            activity.getContentResolver().delete(ContentUris.withAppendedId(
-                                                    NoteFeatures.CATEGORIES_URI, category.id), null, null);
-                                            changed.run();
-                                        } catch (RuntimeException error) {
-                                            android.widget.Toast.makeText(activity, "删除分类失败，请重试", 0).show();
-                                        }
-                                    }
-                                }).create());
-                    }
-                });
+                show(new AlertDialog.Builder(activity).setTitle("删除分类？")
+                        .setMessage("删除“" + category.name + "”后，其中的笔记将归入“未分类”，笔记内容会保留。")
+                        .setNegativeButton("取消", null).setPositiveButton("删除分类",
+                                new DialogInterface.OnClickListener() {
+                            @Override public void onClick(DialogInterface dialog, int which) {
+                                try {
+                                    activity.getContentResolver().delete(ContentUris.withAppendedId(
+                                            NoteFeatures.CATEGORIES_URI, category.id), null, null);
+                                    picker.dismiss();
+                                    changed.run();
+                                } catch (RuntimeException error) {
+                                    android.widget.Toast.makeText(activity, "删除分类失败，请重试", 0).show();
+                                }
+                            }
+                        }).create());
+                return true;
             }
         });
     }

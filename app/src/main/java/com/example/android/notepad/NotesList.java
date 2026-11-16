@@ -31,6 +31,9 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.TextUtils;
+import android.text.SpannableString;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
 import android.view.Gravity;
 import android.view.Menu;
 import android.view.MotionEvent;
@@ -87,6 +90,10 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
     private AlertDialog mDeleteDialog;
     private long mCategory = -1;
     private boolean mTrash;
+    private boolean mTodo;
+    private TodoPanel mTodoPanel;
+    private final ArrayList<LinearLayout> mNavigation = new ArrayList<LinearLayout>();
+    private View mScopeHeader;
     private long mOpenNote = -1;
     private float mTouchX, mTouchY;
     private boolean mHorizontalDrag, mVerticalDrag;
@@ -110,6 +117,7 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
             mQuery = state.getString(STATE_QUERY, "");
             mCategory = state.getLong("category_filter", -1);
             mTrash = state.getBoolean("trash_filter");
+            mTodo = state.getBoolean("todo_tab");
             mSelecting = state.getBoolean("selecting");
             long[] ids = state.getLongArray("selected_ids");
             if (ids != null) for (long id : ids) mSelectedIds.add(id);
@@ -141,10 +149,11 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
                         title = body == null ? "" : body.trim();
                         int newline = title.indexOf('\n');
                         if (newline >= 0) title = title.substring(0, newline);
-                        title = title.substring(0, Math.min(30, title.length()));
+                        title = TextUtils.isEmpty(mQuery) ? title.substring(0, Math.min(30, title.length())) : title;
                     }
-                    ((TextView) view).setText(TextUtils.isEmpty(title)
-                            ? getString(R.string.untitled_note) : title);
+                    if (!TextUtils.isEmpty(mQuery) && !TextUtils.isEmpty(title)) title = searchExcerpt(title, 4);
+                    ((TextView) view).setText(highlightMatches(TextUtils.isEmpty(title)
+                            ? getString(R.string.untitled_note) : title));
                     return true;
                 }
                 return false;
@@ -193,6 +202,9 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
         findViewById(R.id.restore_selected).setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) { restore(new ArrayList<Long>(mSelectedIds)); }
         });
+        mTodoPanel = new TodoPanel(this, (android.widget.FrameLayout) findViewById(R.id.todo_content),
+                new Runnable() { @Override public void run() { updateScopeHeader(); } });
+        createNavigation();
         createScopeHeader();
         ((NoteListView) getListView()).setSwipeTouchListener(new View.OnTouchListener() {
             @Override public boolean onTouch(View view, MotionEvent event) {
@@ -274,6 +286,7 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
         state.putString(STATE_QUERY, mQuery);
         state.putLong("category_filter", mCategory);
         state.putBoolean("trash_filter", mTrash);
+        state.putBoolean("todo_tab", mTodo);
         state.putBoolean("selecting", mSelecting);
         long[] ids = new long[mSelectedIds.size()];
         int index = 0;
@@ -346,7 +359,11 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
         }
         findViewById(R.id.selection_bar).setVisibility(mSelecting ? View.VISIBLE : View.GONE);
         findViewById(R.id.selection_footer).setVisibility(mSelecting ? View.VISIBLE : View.GONE);
-        mSearchView.setVisibility(mSelecting ? View.GONE : View.VISIBLE);
+        mSearchView.setVisibility(mSelecting || mTodo ? View.GONE : View.VISIBLE);
+        findViewById(R.id.notes_content).setVisibility(mTodo ? View.GONE : View.VISIBLE);
+        findViewById(R.id.todo_content).setVisibility(mTodo ? View.VISIBLE : View.GONE);
+        findViewById(R.id.bottom_navigation).setVisibility(mSelecting ? View.GONE : View.VISIBLE);
+        updateNavigation();
         ((TextView) findViewById(R.id.selection_count)).setText(
                 getString(R.string.notes_selected_count, mSelectedIds.size()));
         boolean all = mAdapter.getCount() > 0 && mSelectedIds.size() == mAdapter.getCount();
@@ -433,6 +450,7 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
 
     @Override public boolean onOptionsItemSelected(MenuItem item) {
         if (item.getItemId() == R.id.menu_add) {
+            if (mTodo) { mTodoPanel.add(); return true; }
             if (!mTrash) startActivity(new Intent(Intent.ACTION_INSERT, getIntent().getData(), this,
                     NoteEditor.class).putExtra("category_id", Math.max(0, mCategory)));
             return true;
@@ -481,9 +499,10 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
         mScopeTitle.setEllipsize(TextUtils.TruncateAt.END); mScopeTitle.setTextColor(0xFF202124); mScopeTitle.setTypeface(null, 1);
         mScopeCount = new TextView(this); mScopeCount.setTextSize(12); mScopeCount.setTextColor(0xFF85898E);
         header.addView(mScopeTitle); header.addView(mScopeCount);
-        header.setContentDescription("切换分类与最近删除");
+        mScopeHeader = header;
+        header.setContentDescription("切换笔记分类");
         header.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View view) { showScopes(); }
+            @Override public void onClick(View view) { if (!mTodo && !mTrash) showScopes(); }
         });
         getActionBar().setDisplayShowTitleEnabled(false);
         getActionBar().setDisplayShowHomeEnabled(false);
@@ -495,14 +514,18 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
 
     private void updateScopeHeader() {
         if (mScopeTitle == null) return;
-        String name = mTrash ? "最近删除" : mCategory < 0 ? "全部"
+        String name = mTodo ? "待办" : mTrash ? "最近删除" : mCategory < 0 ? "全部"
                 : mCategoryNames.containsKey(mCategory) ? mCategoryNames.get(mCategory) : "未分类";
-        mScopeTitle.setText(name + " ▾");
+        mScopeTitle.setText(name + (mTodo || mTrash ? "" : " ▾"));
+        mScopeHeader.setClickable(!mTodo && !mTrash);
+        mScopeHeader.setContentDescription(mTodo || mTrash ? name : "切换笔记分类");
         mScopeCount.setText((TextUtils.isEmpty(mQuery) ? "" : "搜索结果 · ") + mAdapter.getCount() + " 篇笔记");
+        if (mTodo) mScopeCount.setText(mTodoPanel.remaining() + " 项未完成 · " + mTodoPanel.count() + " 项待办");
         TextView notice = (TextView) findViewById(R.id.trash_notice);
-        notice.setVisibility(mTrash && !mSelecting ? View.VISIBLE : View.GONE);
+        notice.setVisibility(mTrash && !mTodo && !mSelecting ? View.VISIBLE : View.GONE);
         if (mMenu != null) {
             mMenu.findItem(R.id.menu_add).setVisible(!mTrash);
+            mMenu.findItem(R.id.menu_sort).setVisible(!mTodo);
             View more = mMenu.findItem(R.id.menu_sort).getActionView();
             if (more != null) more.setContentDescription(mTrash ? "最近删除操作" : getString(R.string.notes_sort_title));
         }
@@ -511,25 +534,67 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
     private void showScopes() {
         closeActions();
         final ArrayList<NoteFeatures.Category> categories = NoteFeatures.categories(this);
-        String[] names = new String[categories.size() + 4];
-        names[0] = "全部"; names[1] = "未分类";
-        for (int i = 0; i < categories.size(); i++) names[i + 2] = categories.get(i).name;
-        names[names.length - 2] = "最近删除"; names[names.length - 1] = "管理分类";
-        mDialogs.items("笔记分类", names, new NoteDialogs.Choice() {
+        mDialogs.categoryScopes(new NoteDialogs.Choice() {
             @Override public void select(int index) {
-                if (index == categories.size() + 3) mDialogs.manageCategories(new Runnable() {
-                    @Override public void run() { reloadNotes(); }
-                });
-                else if (index == categories.size() + 2) changeScope(-1, true);
-                else changeScope(index == 0 ? -1 : index == 1 ? 0 : categories.get(index - 2).id, false);
+                changeScope(index == 0 ? -1 : index == 1 ? 0 : categories.get(index - 2).id, false);
             }
+        }, new Runnable() {
+            @Override public void run() { reloadNotes(); }
         });
     }
 
     private void changeScope(long category, boolean trash) {
         exitSelection(); mOpenNote = -1;
-        mCategory = category; mTrash = trash;
+        mCategory = category; mTrash = trash; mTodo = false;
         mQuery = ""; mSearchView.setQuery("", false); mSearchView.clearFocus();
+        updateEmptyMessage(); reloadNotes();
+    }
+
+    private void createNavigation() {
+        LinearLayout bar = (LinearLayout) findViewById(R.id.bottom_navigation);
+        String[] labels = {"笔记", "待办", "最近删除"};
+        String[] icons = {"notes", "todo", "trash"};
+        for (int i = 0; i < labels.length; i++) {
+            final int tab = i;
+            LinearLayout button = new LinearLayout(this);
+            button.setOrientation(LinearLayout.VERTICAL); button.setGravity(Gravity.CENTER);
+            button.setContentDescription(labels[i]); button.setFocusable(true);
+            android.util.TypedValue background = new android.util.TypedValue();
+            if (getTheme().resolveAttribute(android.R.attr.selectableItemBackground, background, true))
+                button.setBackgroundResource(background.resourceId);
+            NoteIconView image = new NoteIconView(this); image.setKind(icons[i]);
+            button.addView(image, new LinearLayout.LayoutParams(NoteFeatures.dp(this, 32), NoteFeatures.dp(this, 32)));
+            TextView caption = new TextView(this); caption.setText(labels[i]); caption.setTextSize(13);
+            caption.setGravity(Gravity.CENTER); caption.setPadding(0, NoteFeatures.dp(this, 3), 0, 0);
+            button.addView(caption, new LinearLayout.LayoutParams(-1, -2));
+            button.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) { selectTab(tab); }
+            });
+            bar.addView(button, new LinearLayout.LayoutParams(0, -1, 1)); mNavigation.add(button);
+        }
+    }
+
+    private void updateNavigation() {
+        int current = mTodo ? 1 : mTrash ? 2 : 0;
+        for (int i = 0; i < mNavigation.size(); i++) {
+            LinearLayout button = mNavigation.get(i);
+            int color = i == current ? 0xFFD5AE00 : 0xFF9C9C9C;
+            button.setSelected(i == current);
+            ((NoteIconView) button.getChildAt(0)).setTint(color);
+            ((TextView) button.getChildAt(1)).setTextColor(color);
+        }
+    }
+
+    private void selectTab(int tab) {
+        if (tab == (mTodo ? 1 : mTrash ? 2 : 0)) return;
+        closeActions(); exitSelection(); mTodoPanel.dismissDialog();
+        mTodo = tab == 1; mTrash = tab == 2;
+        mSearchView.clearFocus();
+        android.view.inputmethod.InputMethodManager keyboard =
+                (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        keyboard.hideSoftInputFromWindow(mSearchView.getWindowToken(), 0);
+        mQuery = ""; mSearchView.setQuery("", false);
+        if (mTodo) mTodoPanel.refresh();
         updateEmptyMessage(); reloadNotes();
     }
 
@@ -577,8 +642,9 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
             int newline = body.indexOf('\n');
             summary = newline >= 0 ? body.substring(newline + 1).trim().replace('\n', ' ') : "";
         }
+        if (!TextUtils.isEmpty(mQuery)) summary = searchExcerpt(body.replace('\n', ' ').replace('\r', ' '), 16);
         TextView preview = (TextView) row.findViewById(R.id.note_preview);
-        preview.setText(summary); preview.setVisibility(TextUtils.isEmpty(summary) ? View.GONE : View.VISIBLE);
+        preview.setText(highlightMatches(summary)); preview.setVisibility(TextUtils.isEmpty(summary) ? View.GONE : View.VISIBLE);
         TextView status = (TextView) row.findViewById(R.id.note_status);
         String categoryName = mCategoryNames.get(category);
         status.setText((pinned && !mTrash ? "↑ 置顶  ·  " : "")
@@ -637,6 +703,36 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
         row.setContentDescription(((TextView) row.findViewById(android.R.id.text1)).getText()
                 + "，" + status.getText() + (importance > 0 ? "，" + importanceLabel.getContentDescription() : "")
                 + "，向左滑动显示操作");
+    }
+
+    private int matchIndex(String text, int start) {
+        if (TextUtils.isEmpty(mQuery)) return -1;
+        for (int i = start; i <= text.length() - mQuery.length(); i++)
+            if (text.regionMatches(true, i, mQuery, 0, mQuery.length())) return i;
+        return -1;
+    }
+
+    private CharSequence highlightMatches(String text) {
+        if (TextUtils.isEmpty(mQuery) || TextUtils.isEmpty(text)) return text;
+        SpannableString result = new SpannableString(text);
+        int index = matchIndex(text, 0);
+        while (index >= 0) {
+            result.setSpan(new ForegroundColorSpan(0xFFD4AA00), index, index + mQuery.length(),
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            index = matchIndex(text, index + mQuery.length());
+        }
+        return result;
+    }
+
+    private String searchExcerpt(String text, int leadingContext) {
+        int match = matchIndex(text, 0);
+        if (match < 0) return text;
+        int start = Math.max(0, match - leadingContext);
+        int end = Math.min(text.length(), Math.max(start + 100, match + mQuery.length() + 16));
+        // Keep surrogate pairs intact when trimming the display-only excerpt.
+        if (start > 0 && Character.isLowSurrogate(text.charAt(start))) start--;
+        if (end < text.length() && Character.isHighSurrogate(text.charAt(end - 1))) end++;
+        return (start > 0 ? "…" : "") + text.substring(start, end) + (end < text.length() ? "…" : "");
     }
 
     private interface RowAction { void run(View anchor); }
@@ -729,11 +825,13 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
     @Override public void onBackPressed() {
         if (mSelecting) exitSelection();
         else if (mOpenNote != -1) closeActions();
+        else if (mTodo) selectTab(0);
         else if (mTrash || mCategory != -1) changeScope(-1, false);
         else super.onBackPressed();
     }
 
     @Override protected void onDestroy() {
+        if (mTodoPanel != null) mTodoPanel.destroy();
         if (mDialogs != null) mDialogs.destroy();
         if (mSortDialog != null) mSortDialog.dismiss();
         if (mDeleteDialog != null) mDeleteDialog.dismiss();

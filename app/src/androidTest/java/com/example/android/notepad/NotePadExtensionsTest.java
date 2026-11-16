@@ -127,7 +127,20 @@ public class NotePadExtensionsTest extends ActivityInstrumentationTestCase2<Note
         } while (SystemClock.uptimeMillis() < end);
         fail("Missing action " + label);
     }
-    private void scope(String name) { tap("切换分类与最近删除", true); tap(name); }
+    private void scope(String name) {
+        if ("最近删除".equals(name)) { tap("最近删除", true); return; }
+        tap("笔记", true); tap("切换笔记分类", true); tap(name);
+    }
+    private void longTap(String label) {
+        AccessibilityNodeInfo target = find(getInstrumentation().getUiAutomation().getRootInActiveWindow(), label, false);
+        assertNotNull("Missing category " + label, target);
+        Rect area = new Rect(); target.getBoundsInScreen(area);
+        long down = SystemClock.uptimeMillis();
+        getInstrumentation().sendPointerSync(MotionEvent.obtain(down, down, MotionEvent.ACTION_DOWN, area.centerX(), area.centerY(), 0));
+        SystemClock.sleep(800);
+        getInstrumentation().sendPointerSync(MotionEvent.obtain(down, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, area.centerX(), area.centerY(), 0));
+        getInstrumentation().waitForIdleSync(); SystemClock.sleep(120);
+    }
     private void select(final int position) {
         main(new Runnable() { @Override public void run() {
             View row = list.getListAdapter().getView(position, null, list.getListView());
@@ -184,9 +197,9 @@ public class NotePadExtensionsTest extends ActivityInstrumentationTestCase2<Note
         getInstrumentation().waitForIdleSync();
     }
 
-    public void testCategoryDialogsCreateRenameDeleteAndBulkMove() throws Exception {
-        String name = prefix + "学习", renamed = prefix + "生活";
-        scope("管理分类"); tap("＋ 新建分类");
+    public void testCategoryCreateBulkMoveAndLongPressDeleteFromPicker() throws Exception {
+        String name = prefix + "学习";
+        select(0); click(R.id.move_selected); tap("新建分类");
         screenshot("居中分类输入弹窗"); enterCategoryName(name); tap("确定");
         long categoryId = 0;
         for (NoteFeatures.Category category : NoteFeatures.categories(getInstrumentation().getTargetContext())) {
@@ -202,11 +215,122 @@ public class NotePadExtensionsTest extends ActivityInstrumentationTestCase2<Note
         assertEquals(categoryId, value(c, "category_id", false));
         scope(name); awaitRows(a, b, c); search(prefix); awaitRows(a, b, c);
         screenshot("分类筛选与笔记数量");
-        scope("管理分类"); tap(name); tap("重命名"); enterCategoryName(renamed); tap("确定");
+        select(0); click(R.id.move_selected);
+        screenshot("简化分类选择");
+        assertNull(find(getInstrumentation().getUiAutomation().getRootInActiveWindow(), "＋ 新建分类", false));
+        longTap(name); tap("取消");
+        assertEquals(categoryId, value(a, "category_id", false));
+        longTap(name); screenshot("长按删除分类确认"); tap("删除分类");
+        tap("取消");
         awaitRows(a, b, c);
-        assertEquals(renamed, NoteFeatures.categoryName(getInstrumentation().getTargetContext(), categoryId));
-        scope("管理分类"); tap(renamed); tap("删除分类"); tap("删除分类");
-        awaitRows(a, b, c);
+        assertEquals(0, value(a, "category_id", false));
+        assertEquals(0, value(b, "category_id", false));
+        assertEquals(0, value(c, "category_id", false));
+        assertEquals(1609459200300L, value(a, "modified", false));
+    }
+
+    public void testCategoryScopesLongPressDeleteAndProtectedEntries() throws Exception {
+        long id = category(prefix + "分类"); update(a, "category_id", id); update(b, "category_id", id);
+        update(b, "deleted_at", 1000); awaitRows(a, c);
+        scope(prefix + "分类"); search(prefix); awaitRows(a);
+        tap("切换笔记分类", true);
+        screenshot("不含管理入口的分类切换");
+        assertNull(find(getInstrumentation().getUiAutomation().getRootInActiveWindow(), "最近删除", false));
+        assertNull(find(getInstrumentation().getUiAutomation().getRootInActiveWindow(), "管理分类", false));
+        for (String builtin : new String[] {"全部", "未分类"}) {
+            longTap(builtin);
+            screenshot("长按系统分类_" + builtin);
+            assertNull(find(getInstrumentation().getUiAutomation().getRootInActiveWindow(), "删除分类", false));
+        }
+        longTap(prefix + "分类"); screenshot("切换列表长按分类后"); tap("取消");
+        assertEquals(id, value(a, "category_id", false));
+        longTap(prefix + "分类"); tap("删除分类"); awaitRows(a, c);
+        assertEquals(0, value(a, "category_id", false)); assertEquals(0, value(b, "category_id", true));
+        assertEquals(1000, value(b, "deleted_at", true));
+        assertEquals(1609459200300L, value(a, "modified", false));
+    }
+
+    private View recycledSearchRow;
+    private void assertHighlights(final long id, final String query, final int titleCount, final int bodyCount) {
+        final int[] counts = {-1, -1};
+        final String[] displayed = {"", ""};
+        long deadline = SystemClock.uptimeMillis() + 8000;
+        do {
+            main(new Runnable() { @Override public void run() {
+                for (int position = 0; position < list.getListAdapter().getCount(); position++) {
+                    if (list.getListAdapter().getItemId(position) != id) continue;
+                    recycledSearchRow = list.getListAdapter().getView(position, recycledSearchRow, list.getListView());
+                    int[] fields = {android.R.id.text1, R.id.note_preview};
+                    for (int i = 0; i < fields.length; i++) {
+                        CharSequence text = ((TextView) recycledSearchRow.findViewById(fields[i])).getText();
+                        displayed[i] = text.toString(); counts[i] = 0;
+                        if (!(text instanceof android.text.Spanned)) continue;
+                        android.text.Spanned styled = (android.text.Spanned) text;
+                        android.text.style.ForegroundColorSpan[] spans = styled.getSpans(0, text.length(), android.text.style.ForegroundColorSpan.class);
+                        for (android.text.style.ForegroundColorSpan span : spans) {
+                            String match = text.subSequence(styled.getSpanStart(span), styled.getSpanEnd(span)).toString();
+                            if (query == null || !query.equalsIgnoreCase(match) || span.getForegroundColor() != 0xFFD4AA00) {
+                                counts[i] = -999; break;
+                            }
+                            counts[i]++;
+                        }
+                    }
+                }
+            }});
+            if (counts[0] == titleCount && counts[1] == bodyCount) return;
+            SystemClock.sleep(60);
+        } while (SystemClock.uptimeMillis() < deadline);
+        assertEquals("Title: " + displayed[0], titleCount, counts[0]);
+        assertEquals("Body: " + displayed[1], bodyCount, counts[1]);
+    }
+
+    public void testSearchHighlightsRepeatedTitleAndDeepBodyAndClearsRecycledRows() throws Exception {
+        StringBuilder body = new StringBuilder(prefix + "正文 ");
+        for (int i = 0; i < 100; i++) body.append("前文内容 ");
+        body.append("figure 和 FIGURE，中文匹配中文，特殊字符 %_ 仍是原文。");
+        final String original = body.toString();
+        ContentValues values = new ContentValues(); values.put("title", prefix + " FiGuRe figure 中文");
+        values.put("note", original); resolver.update(NoteFeatures.noteUri(a), values, null, null);
+        search("figure"); awaitRows(a); assertHighlights(a, "figure", 2, 2);
+        screenshot("标题正文黄色搜索标记");
+        search("中文"); awaitRows(a); assertHighlights(a, "中文", 1, 2);
+        search("%_"); awaitRows(a); assertHighlights(a, "%_", 0, 1);
+        search("not-found-" + prefix); awaitRows();
+        search(""); assertHighlights(a, null, 0, 0);
+        Cursor cursor = resolver.query(NoteFeatures.noteUri(a), new String[]{"note","modified"}, null, null, null);
+        try { assertTrue(cursor.moveToFirst()); assertEquals(original, cursor.getString(0)); assertEquals(1609459200300L, cursor.getLong(1)); }
+        finally { cursor.close(); }
+        search(prefix); awaitRows(a, b, c);
+    }
+
+    public void testUntitledSearchShowsDeepBodyMatchAndCategorySearchStaysScoped() throws Exception {
+        ContentValues values = new ContentValues(); values.put("title", "");
+        StringBuilder body = new StringBuilder(prefix + "无标题首行\n");
+        for (int i = 0; i < 80; i++) body.append("其他段落 ");
+        body.append("关键词测试"); values.put("note", body.toString());
+        resolver.update(NoteFeatures.noteUri(a), values, null, null);
+        long group = category(prefix + "筛选"); update(a, "category_id", group);
+        scope(prefix + "筛选"); search("关键词"); awaitRows(a);
+        assertHighlights(a, "关键词", 0, 1);
+        search("丙"); awaitRows();
+        search("关键词"); awaitRows(a); assertHighlights(a, "关键词", 0, 1);
+        StringBuilder longTitle = new StringBuilder(prefix);
+        for (int i = 0; i < 60; i++) longTitle.append("很长的标题");
+        longTitle.append("关键词");
+        ContentValues title = new ContentValues(); title.put("title", longTitle.toString());
+        resolver.update(NoteFeatures.noteUri(a), title, null, null);
+        assertHighlights(a, "关键词", 1, 1);
+        screenshot("长标题命中词保持可见");
+    }
+
+    public void testEditorDeletingCurrentCategoryDoesNotSaveOrphanedCategory() throws Exception {
+        final long id = category(prefix + "编辑分类"); update(a, "category_id", id);
+        Intent intent = new Intent(Intent.ACTION_EDIT, NoteFeatures.noteUri(a),
+                getInstrumentation().getTargetContext(), NoteEditor.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        editor = getInstrumentation().startActivitySync(intent); getInstrumentation().waitForIdleSync();
+        main(new Runnable() { @Override public void run() { editor.findViewById(R.id.editor_category).performClick(); }});
+        longTap(prefix + "编辑分类"); tap("删除分类"); tap("取消");
+        main(new Runnable() { @Override public void run() { editor.onBackPressed(); }});
         assertEquals(0, value(a, "category_id", false));
         assertEquals(1609459200300L, value(a, "modified", false));
     }
@@ -486,7 +610,98 @@ public class NotePadExtensionsTest extends ActivityInstrumentationTestCase2<Note
         assertEquals(1609459200300L, value(a, "modified", false));
     }
 
+
+    private void assertNavigation(final int selected) {
+        final int[] state = new int[3];
+        main(new Runnable() { @Override public void run() {
+            ViewGroup nav = (ViewGroup) list.findViewById(R.id.bottom_navigation);
+            for (int i = 0; i < 3; i++) state[i] = nav.getChildAt(i).isSelected() ? 1 : 0;
+        }});
+        for (int i = 0; i < 3; i++) assertEquals(i == selected ? 1 : 0, state[i]);
+    }
+
+    public void testBottomNavigationAndTrashRecreation() throws Exception {
+        assertNavigation(0); screenshot("底部导航_笔记");
+        tap("切换笔记分类", true);
+        assertNull(find(getInstrumentation().getUiAutomation().getRootInActiveWindow(), "最近删除", false));
+        tap("取消");
+        update(a, "deleted_at", 1000); awaitRows(b, c);
+        tap("最近删除", true); search(prefix); awaitRows(a); assertNavigation(2);
+        screenshot("底部导航_最近删除");
+        Instrumentation.ActivityMonitor monitor = getInstrumentation().addMonitor(NotesList.class.getName(), null, false);
+        main(new Runnable() { @Override public void run() { list.recreate(); }});
+        list = (NotesList) getInstrumentation().waitForMonitorWithTimeout(monitor, 8000);
+        getInstrumentation().removeMonitor(monitor); assertNotNull(list); awaitRows(a); assertNavigation(2);
+        select(0); click(R.id.restore_selected); awaitRows();
+        tap("笔记", true); search(prefix); awaitRows(a, b, c); assertNavigation(0);
+        select(0);
+        final int[] visibility = {-1};
+        main(new Runnable() { @Override public void run() {
+            visibility[0] = list.findViewById(R.id.bottom_navigation).getVisibility();
+        }});
+        assertEquals(View.GONE, visibility[0]); click(R.id.cancel_selection); assertNavigation(0);
+    }
+
+    private AccessibilityNodeInfo taskInput(AccessibilityNodeInfo root) {
+        if (root == null) return null;
+        if ("android.widget.EditText".contentEquals(root.getClassName())) return root;
+        for (int i = 0; i < root.getChildCount(); i++) {
+            AccessibilityNodeInfo input = taskInput(root.getChild(i)); if (input != null) return input;
+        }
+        return null;
+    }
+    private void enterTask(String text) {
+        AccessibilityNodeInfo input = taskInput(getInstrumentation().getUiAutomation().getRootInActiveWindow());
+        assertNotNull(input);
+        Bundle args = new Bundle(); args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
+        assertTrue(input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args));
+        getInstrumentation().waitForIdleSync();
+    }
+    private TodoStore.Item task(String title) {
+        TodoStore store = new TodoStore(getInstrumentation().getTargetContext());
+        try { for (TodoStore.Item item : store.items()) if (title.equals(item.text)) return item; }
+        finally { store.close(); }
+        return null;
+    }
+
+    public void testTodoCreateCompleteEditPersistAndDelete() throws Exception {
+        final String title = prefix + "准备实验报告";
+        tap("待办", true); assertNavigation(1);
+        final int[] visible = {-1, -1};
+        main(new Runnable() { @Override public void run() {
+            visible[0] = list.findViewById(R.id.notes_content).getVisibility();
+            visible[1] = list.findViewById(R.id.search_notes).getVisibility();
+        }});
+        assertEquals(View.GONE, visible[0]); assertEquals(View.GONE, visible[1]);
+        getInstrumentation().invokeMenuActionSync(list, R.id.menu_add, 0);
+        tap("保存"); assertNotNull(taskInput(getInstrumentation().getUiAutomation().getRootInActiveWindow()));
+        enterTask(title); tap("保存");
+        assertNotNull(task(title)); assertFalse(task(title).done);
+        tap("完成待办：" + title, true); assertTrue(task(title).done);
+        screenshot("底部导航_待办");
+        Instrumentation.ActivityMonitor monitor = getInstrumentation().addMonitor(NotesList.class.getName(), null, false);
+        main(new Runnable() { @Override public void run() { list.recreate(); }});
+        list = (NotesList) getInstrumentation().waitForMonitorWithTimeout(monitor, 8000);
+        getInstrumentation().removeMonitor(monitor); assertNotNull(list); assertNavigation(1);
+        tap("标为未完成：" + title, true); assertFalse(task(title).done);
+        tap(title + "，未完成，点击编辑，长按删除", true);
+        enterTask(title + "已修改"); tap("保存"); assertNull(task(title)); assertNotNull(task(title + "已修改"));
+        tap("最近删除", true); assertNavigation(2);
+        tap("待办", true); assertNavigation(1); assertNotNull(task(title + "已修改"));
+        longTap(title + "已修改，未完成，点击编辑，长按删除"); tap("取消");
+        assertNotNull(task(title + "已修改"));
+        longTap(title + "已修改，未完成，点击编辑，长按删除"); tap("删除");
+        assertNull(task(title + "已修改"));
+        main(new Runnable() { @Override public void run() { list.onBackPressed(); }});
+        assertNavigation(0); search(prefix); awaitRows(a, b, c);
+    }
+
     @Override protected void tearDown() throws Exception {
+        TodoStore taskStore = new TodoStore(getInstrumentation().getTargetContext());
+        try { for (TodoStore.Item item : taskStore.items())
+            if (item.text.startsWith(prefix)) taskStore.delete(item.id); }
+        finally { taskStore.close(); }
+
         if (editor != null && !editor.isFinishing()) main(new Runnable() {
             @Override public void run() { editor.finish(); }
         });
