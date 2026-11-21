@@ -85,6 +85,7 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
     private String mQuery = "";
     private boolean mSelecting;
     private boolean mLoading = true;
+    private boolean mHasResumed;
     private int mSortOrder;
     private AlertDialog mSortDialog;
     private AlertDialog mDeleteDialog;
@@ -94,6 +95,7 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
     private TodoPanel mTodoPanel;
     private final ArrayList<LinearLayout> mNavigation = new ArrayList<LinearLayout>();
     private View mScopeHeader;
+    private View mAddNote;
     private long mOpenNote = -1;
     private float mTouchX, mTouchY;
     private boolean mHorizontalDrag, mVerticalDrag;
@@ -204,6 +206,7 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
         });
         mTodoPanel = new TodoPanel(this, (android.widget.FrameLayout) findViewById(R.id.todo_content),
                 new Runnable() { @Override public void run() { updateScopeHeader(); } });
+        createNoteButton();
         createNavigation();
         createScopeHeader();
         ((NoteListView) getListView()).setSwipeTouchListener(new View.OnTouchListener() {
@@ -267,6 +270,28 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
         getLoaderManager().initLoader(NOTES_LOADER, null, this);
     }
 
+    private void createNoteButton() {
+        TextView add = new TextView(this);
+        add.setId(R.id.new_note); add.setText("＋"); add.setTextColor(Color.WHITE);
+        add.setTextSize(38); add.setGravity(Gravity.CENTER); add.setContentDescription("新建笔记");
+        add.setBackgroundDrawable(NoteFeatures.rounded(this, 0xFFFFC900, 40));
+        if (android.os.Build.VERSION.SDK_INT >= 21) add.setElevation(NoteFeatures.dp(this, 6));
+        android.widget.FrameLayout.LayoutParams params = new android.widget.FrameLayout.LayoutParams(
+                NoteFeatures.dp(this, 64), NoteFeatures.dp(this, 64), Gravity.BOTTOM | Gravity.RIGHT);
+        params.rightMargin = NoteFeatures.dp(this, 26); params.bottomMargin = NoteFeatures.dp(this, 24);
+        ((android.widget.FrameLayout) findViewById(R.id.notes_content)).addView(add, params);
+        mAddNote = add;
+        add.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { createNote(); }
+        });
+    }
+
+    private void createNote() {
+        if (mTrash || mTodo || mSelecting) return;
+        startActivity(new Intent(Intent.ACTION_INSERT, getIntent().getData(), this,
+                NoteEditor.class).putExtra("category_id", Math.max(0, mCategory)));
+    }
+
     private void updateEmptyMessage() {
         mEmptyView.setText(!TextUtils.isEmpty(mQuery) ? getString(R.string.notes_search_empty)
                 : mTrash ? "最近删除为空" : mCategory >= 0 ? "此分类暂无笔记" : getString(R.string.notes_empty));
@@ -280,6 +305,13 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
         mAdapter.swapCursor(null);
         updateSelectionUi();
         getLoaderManager().restartLoader(NOTES_LOADER, null, this);
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        // onCreate already starts the first loader. Only reload on subsequent resumes.
+        if (mHasResumed && mAdapter != null) reloadNotes();
+        mHasResumed = true;
     }
 
     @Override protected void onSaveInstanceState(Bundle state) {
@@ -363,6 +395,10 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
         findViewById(R.id.notes_content).setVisibility(mTodo ? View.GONE : View.VISIBLE);
         findViewById(R.id.todo_content).setVisibility(mTodo ? View.VISIBLE : View.GONE);
         findViewById(R.id.bottom_navigation).setVisibility(mSelecting ? View.GONE : View.VISIBLE);
+        mAddNote.setVisibility(!mTodo && !mTrash && !mSelecting ? View.VISIBLE : View.GONE);
+        // Allow the last note to scroll clear of the floating add button.
+        getListView().setPadding(0, NoteFeatures.dp(this, 8), 0,
+                NoteFeatures.dp(this, mTrash || mSelecting ? 20 : 112));
         updateNavigation();
         ((TextView) findViewById(R.id.selection_count)).setText(
                 getString(R.string.notes_selected_count, mSelectedIds.size()));
@@ -451,8 +487,7 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
     @Override public boolean onOptionsItemSelected(MenuItem item) {
         if (item.getItemId() == R.id.menu_add) {
             if (mTodo) { mTodoPanel.add(); return true; }
-            if (!mTrash) startActivity(new Intent(Intent.ACTION_INSERT, getIntent().getData(), this,
-                    NoteEditor.class).putExtra("category_id", Math.max(0, mCategory)));
+            createNote();
             return true;
         } else if (item.getItemId() == R.id.menu_sort) {
             showSortDialog();
@@ -508,7 +543,7 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
         getActionBar().setDisplayShowHomeEnabled(false);
         getActionBar().setDisplayShowCustomEnabled(true);
         getActionBar().setCustomView(header, new android.app.ActionBar.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         getActionBar().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0xFFFFFFFF));
     }
 
@@ -524,7 +559,7 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
         TextView notice = (TextView) findViewById(R.id.trash_notice);
         notice.setVisibility(mTrash && !mTodo && !mSelecting ? View.VISIBLE : View.GONE);
         if (mMenu != null) {
-            mMenu.findItem(R.id.menu_add).setVisible(!mTrash);
+            mMenu.findItem(R.id.menu_add).setVisible(false);
             mMenu.findItem(R.id.menu_sort).setVisible(!mTodo);
             View more = mMenu.findItem(R.id.menu_sort).getActionView();
             if (more != null) more.setContentDescription(mTrash ? "最近删除操作" : getString(R.string.notes_sort_title));
@@ -587,7 +622,7 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
 
     private void selectTab(int tab) {
         if (tab == (mTodo ? 1 : mTrash ? 2 : 0)) return;
-        closeActions(); exitSelection(); mTodoPanel.dismissDialog();
+        closeActions(); exitSelection(); mTodoPanel.dismissDialog(); mTodoPanel.closeActions();
         mTodo = tab == 1; mTrash = tab == 2;
         mSearchView.clearFocus();
         android.view.inputmethod.InputMethodManager keyboard =
@@ -649,7 +684,11 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
         String categoryName = mCategoryNames.get(category);
         status.setText((pinned && !mTrash ? "↑ 置顶  ·  " : "")
                 + (categoryName == null ? "未分类" : categoryName));
+        TextView remaining = (TextView) row.findViewById(R.id.trash_remaining);
+        remaining.setVisibility(mTrash ? View.VISIBLE : View.GONE);
         if (mTrash) {
+            remaining.setText("剩余 " + TrashRetention.remainingDays(cursor.getLong(
+                    cursor.getColumnIndexOrThrow("deleted_at")), System.currentTimeMillis()) + " 天");
             SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA);
             format.setTimeZone(TimeZone.getTimeZone("Asia/Shanghai"));
             ((TextView) row.findViewById(android.R.id.text2)).setText("删除于："
@@ -788,7 +827,7 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
         mDeleteDialog = new AlertDialog.Builder(this)
                 .setTitle(permanent ? "彻底删除笔记？" : "移入最近删除？")
                 .setMessage(permanent ? "将永久删除这 " + ids.size() + " 篇笔记，无法恢复。"
-                        : "将这 " + ids.size() + " 篇笔记移入最近删除，之后可以恢复。")
+                        : "将这 " + ids.size() + " 篇笔记移入最近删除，可在 30 天内恢复，到期自动永久删除。")
                 .setNegativeButton(R.string.button_cancel, null)
                 .setPositiveButton(permanent ? "彻底删除" : "删除", new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface dialog, int which) {
@@ -825,6 +864,7 @@ public class NotesList extends ListActivity implements LoaderManager.LoaderCallb
     @Override public void onBackPressed() {
         if (mSelecting) exitSelection();
         else if (mOpenNote != -1) closeActions();
+        else if (mTodo && mTodoPanel.closeActions()) { }
         else if (mTodo) selectTab(0);
         else if (mTrash || mCategory != -1) changeScope(-1, false);
         else super.onBackPressed();

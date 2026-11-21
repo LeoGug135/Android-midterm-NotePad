@@ -72,6 +72,13 @@ public class NoteIconView extends View {
             path.moveTo(5, 10); path.cubicTo(8, 0, 22, 4, 21, 13);
             path.cubicTo(20, 22, 8, 23, 5, 16);
             path.moveTo(4, 4); path.lineTo(4, 11); path.lineTo(11, 11);
+        } else if ("color".equals(icon)) {
+            int[] shades = {0xFFFFE778, 0xFFA6DDBB, 0xFF9BDCF2, 0xFFFFB7C2, 0xFFFFD093};
+            paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(3.2f);
+            android.graphics.RectF ring = new android.graphics.RectF(3, 3, 21, 21);
+            for (int i = 0; i < shades.length; i++) {
+                paint.setColor(shades[i]); canvas.drawArc(ring, -90 + i * 72, 74, false, paint);
+            }
         } else if ("style".equals(icon)) {
             paint.setStyle(Paint.Style.FILL); paint.setTextSize(18); paint.setFakeBoldText(true);
             canvas.drawText("Aa", 1, 19, paint); paint.setFakeBoldText(false);

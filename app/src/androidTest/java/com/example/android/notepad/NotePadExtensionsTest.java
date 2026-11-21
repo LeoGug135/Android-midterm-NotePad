@@ -37,19 +37,23 @@ public class NotePadExtensionsTest extends ActivityInstrumentationTestCase2<Note
     private final ArrayList<Uri> notes = new ArrayList<Uri>();
     private final ArrayList<Uri> categories = new ArrayList<Uri>();
     private long a, b, c;
-    private int oldSort, oldFont;
+    private long recentDeletion;
+    private int oldSort, oldFont, oldTodoColor;
+    private boolean hadTodoColor;
     private boolean hadSort, hadFont;
 
     public NotePadExtensionsTest() { super(NotesList.class); }
 
     @Override protected void setUp() throws Exception {
         super.setUp();
+        recentDeletion = System.currentTimeMillis() - 60000;
         resolver = getInstrumentation().getTargetContext().getContentResolver();
         prefix = "扩展" + (System.nanoTime() % 1000000000L);
         android.content.SharedPreferences prefs = getInstrumentation().getTargetContext().getSharedPreferences("NotesList", 0);
         hadSort = prefs.contains("sort_order"); oldSort = prefs.getInt("sort_order", 0);
         prefs.edit().putInt("sort_order", 0).commit();
         android.content.SharedPreferences appearance = NoteFeatures.preferences(getInstrumentation().getTargetContext());
+        hadTodoColor = appearance.contains("todo_color"); oldTodoColor=appearance.getInt("todo_color",2);
         hadFont = appearance.contains("font_index"); oldFont = appearance.getInt("font_index", 1);
         a = insert("甲", 100, 300); b = insert("乙", 300, 200); c = insert("丙", 200, 100);
         list = getActivity(); search(prefix); awaitRows(a, b, c);
@@ -231,7 +235,7 @@ public class NotePadExtensionsTest extends ActivityInstrumentationTestCase2<Note
 
     public void testCategoryScopesLongPressDeleteAndProtectedEntries() throws Exception {
         long id = category(prefix + "分类"); update(a, "category_id", id); update(b, "category_id", id);
-        update(b, "deleted_at", 1000); awaitRows(a, c);
+        update(b, "deleted_at", recentDeletion); awaitRows(a, c);
         scope(prefix + "分类"); search(prefix); awaitRows(a);
         tap("切换笔记分类", true);
         screenshot("不含管理入口的分类切换");
@@ -246,7 +250,7 @@ public class NotePadExtensionsTest extends ActivityInstrumentationTestCase2<Note
         assertEquals(id, value(a, "category_id", false));
         longTap(prefix + "分类"); tap("删除分类"); awaitRows(a, c);
         assertEquals(0, value(a, "category_id", false)); assertEquals(0, value(b, "category_id", true));
-        assertEquals(1000, value(b, "deleted_at", true));
+        assertEquals(recentDeletion, value(b, "deleted_at", true));
         assertEquals(1609459200300L, value(a, "modified", false));
     }
 
@@ -439,14 +443,14 @@ public class NotePadExtensionsTest extends ActivityInstrumentationTestCase2<Note
     public void testCategoryRenameDeletePreservesActiveAndDeletedNotes() {
         long id = category(prefix + "分类");
         update(a, "category_id", id); update(b, "category_id", id);
-        update(b, "deleted_at", 1000);
+        update(b, "deleted_at", recentDeletion);
         ContentValues name = new ContentValues(); name.put("name", prefix + "更名");
         Uri uri = ContentUris.withAppendedId(NoteFeatures.CATEGORIES_URI, id);
         assertEquals(1, resolver.update(uri, name, null, null));
         assertEquals(prefix + "更名", NoteFeatures.categoryName(getInstrumentation().getTargetContext(), id));
         assertEquals(1, resolver.delete(uri, null, null));
         assertEquals(0, value(a, "category_id", false)); assertEquals(0, value(b, "category_id", true));
-        assertEquals(1000, value(b, "deleted_at", true));
+        assertEquals(recentDeletion, value(b, "deleted_at", true));
         assertEquals(1609459200300L, value(a, "modified", false));
     }
 
@@ -625,7 +629,7 @@ public class NotePadExtensionsTest extends ActivityInstrumentationTestCase2<Note
         tap("切换笔记分类", true);
         assertNull(find(getInstrumentation().getUiAutomation().getRootInActiveWindow(), "最近删除", false));
         tap("取消");
-        update(a, "deleted_at", 1000); awaitRows(b, c);
+        update(a, "deleted_at", recentDeletion); awaitRows(b, c);
         tap("最近删除", true); search(prefix); awaitRows(a); assertNavigation(2);
         screenshot("底部导航_最近删除");
         Instrumentation.ActivityMonitor monitor = getInstrumentation().addMonitor(NotesList.class.getName(), null, false);
@@ -696,6 +700,148 @@ public class NotePadExtensionsTest extends ActivityInstrumentationTestCase2<Note
         assertNavigation(0); search(prefix); awaitRows(a, b, c);
     }
 
+
+    public void testThirtyDayRetentionBoundaryAndRestoredNotesAreProtected() {
+        SQLiteDatabase db = SQLiteDatabase.create(null);
+        long now = 1800000000000L;
+        try {
+            db.execSQL("CREATE TABLE notes (_id INTEGER PRIMARY KEY,deleted_at INTEGER,title TEXT)");
+            db.execSQL("INSERT INTO notes VALUES (1,0,'active')");
+            db.execSQL("INSERT INTO notes VALUES (2,?,'expired')", new Object[] {now-TrashRetention.RETENTION});
+            db.execSQL("INSERT INTO notes VALUES (3,?,'still retained')", new Object[] {now-TrashRetention.RETENTION+1});
+            db.execSQL("INSERT INTO notes VALUES (4,?,'older')", new Object[] {now-TrashRetention.RETENTION-1});
+            db.execSQL("INSERT INTO notes VALUES (5,?,'future')", new Object[] {now+1000});
+            assertEquals(2,TrashRetention.purge(db,now));
+            assertEquals(0,TrashRetention.purge(db,now));
+            Cursor rows=db.rawQuery("SELECT _id FROM notes ORDER BY _id",null);
+            try { assertEquals(3,rows.getCount()); rows.moveToFirst(); assertEquals(1,rows.getInt(0));
+                rows.moveToNext(); assertEquals(3,rows.getInt(0)); rows.moveToNext(); assertEquals(5,rows.getInt(0)); }
+            finally { rows.close(); }
+            db.execSQL("UPDATE notes SET deleted_at=0 WHERE _id=3");
+            assertEquals(0,TrashRetention.purge(db,now+1000));
+            assertEquals(30,TrashRetention.remainingDays(now,now));
+            assertEquals(30,TrashRetention.remainingDays(now+1000,now));
+            assertEquals(29,TrashRetention.remainingDays(now-TrashRetention.DAY,now));
+            assertEquals(1,TrashRetention.remainingDays(now-TrashRetention.RETENTION+1,now));
+            assertEquals(0,TrashRetention.remainingDays(now-TrashRetention.RETENTION,now));
+        } finally { db.close(); }
+    }
+
+    public void testProviderAutoPurgeAndTimestampBadgeRemainingDays() throws Exception {
+        ContentValues values=new ContentValues();
+        values.put("title",prefix+"过期"); values.put("note","expired");
+        values.put("deleted_at",System.currentTimeMillis()-31*TrashRetention.DAY);
+        Uri expired=resolver.insert(NotePad.Notes.CONTENT_URI,values); notes.add(expired);
+        resolver.call(NotePad.Notes.CONTENT_URI,"purgeExpiredTrash",null,null);
+        Cursor check=resolver.query(NoteFeatures.TRASH_URI,null,"_id=?",new String[]{""+ContentUris.parseId(expired)},null);
+        try { assertEquals(0,check.getCount()); } finally { check.close(); }
+        final boolean[] badge={false};
+        main(new Runnable(){@Override public void run(){
+            View row=list.getListAdapter().getView(0,null,list.getListView());
+            badge[0]=row.findViewById(android.R.id.text2).getBackground()!=null
+                && row.findViewById(R.id.trash_remaining).getVisibility()==View.GONE;
+        }}); assertTrue(badge[0]); screenshot("浅灰时间标签_笔记");
+        update(a,"deleted_at",System.currentTimeMillis()-2*TrashRetention.DAY); awaitRows(b,c);
+        scope("最近删除"); search(prefix); awaitRows(a);
+        final String[] remaining={null};
+        main(new Runnable(){@Override public void run(){
+            View row=list.getListAdapter().getView(0,null,list.getListView());
+            remaining[0]=((TextView)row.findViewById(R.id.trash_remaining)).getText().toString();
+        }}); assertEquals("剩余 28 天",remaining[0]); screenshot("浅灰时间标签_最近删除");
+        select(0); click(R.id.restore_selected); awaitRows();
+        scope("全部"); search(prefix); awaitRows(a,b,c);
+    }
+
+    public void testTodoColorMigrationKeepsLegacyFields() {
+        SQLiteDatabase db=SQLiteDatabase.create(null);
+        TodoStore helper=new TodoStore(getInstrumentation().getTargetContext());
+        try {
+            db.execSQL("CREATE TABLE todos (_id INTEGER PRIMARY KEY,text TEXT NOT NULL,done INTEGER NOT NULL DEFAULT 0,created INTEGER NOT NULL)");
+            db.execSQL("INSERT INTO todos VALUES (7,'旧待办',1,123)"); helper.onUpgrade(db,1,2);
+            Cursor row=db.rawQuery("SELECT * FROM todos",null);
+            try { assertTrue(row.moveToFirst()); assertEquals("旧待办",row.getString(row.getColumnIndexOrThrow("text")));
+                assertEquals(1,row.getInt(row.getColumnIndexOrThrow("done")));
+                assertEquals(123,row.getLong(row.getColumnIndexOrThrow("created")));
+                assertEquals(0,row.getInt(row.getColumnIndexOrThrow("color"))); }
+            finally { row.close(); }
+        } finally { db.close(); helper.close(); }
+    }
+
+    private android.widget.ListView todoList() {
+        return (android.widget.ListView) list.findViewById(R.id.todo_content).findViewWithTag("todo_list");
+    }
+    private void swipeTodo(final long id, boolean right) {
+        final Rect bounds=new Rect();
+        main(new Runnable(){@Override public void run(){
+            android.widget.ListView tasks=todoList();
+            for(int i=0;i<tasks.getChildCount();i++) {
+                int position=tasks.getFirstVisiblePosition()+i;
+                if(tasks.getAdapter().getItemId(position)==id) {
+                    View row=tasks.getChildAt(i).findViewWithTag("todo_card");
+                    int[] xy=new int[2];row.getLocationOnScreen(xy);
+                    bounds.set(xy[0],xy[1],xy[0]+row.getWidth(),xy[1]+row.getHeight());
+                }
+            }
+        }}); assertTrue(bounds.width()>0);
+        float start=bounds.left+bounds.width()*(right?.25f:.75f);
+        float end=bounds.left+bounds.width()*(right?.75f:.25f);
+        long down=SystemClock.uptimeMillis();
+        getInstrumentation().sendPointerSync(MotionEvent.obtain(down,down,MotionEvent.ACTION_DOWN,start,bounds.centerY(),0));
+        for(int i=1;i<=8;i++) {
+            SystemClock.sleep(20);getInstrumentation().sendPointerSync(MotionEvent.obtain(down,SystemClock.uptimeMillis(),MotionEvent.ACTION_MOVE,start+(end-start)*i/8,bounds.centerY(),0));
+        }
+        getInstrumentation().sendPointerSync(MotionEvent.obtain(down,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,end,bounds.centerY(),0));
+        getInstrumentation().waitForIdleSync();SystemClock.sleep(200);
+    }
+    private void assertTodoCard(final long id,final boolean done,final int color) {
+        final Bitmap[] image={null};
+        final int[] actionCount={-1};
+        main(new Runnable(){@Override public void run(){
+            android.widget.ListView tasks=todoList();
+            for(int i=0;i<tasks.getAdapter().getCount();i++)if(tasks.getAdapter().getItemId(i)==id){
+                View row=tasks.getAdapter().getView(i,null,tasks); View card=row.findViewWithTag("todo_card");
+                image[0]=Bitmap.createBitmap(4,4,Bitmap.Config.ARGB_8888);
+                android.graphics.drawable.Drawable bg=card.getBackground();bg.setBounds(0,0,4,4);bg.draw(new android.graphics.Canvas(image[0]));
+                actionCount[0]=((ViewGroup)row.findViewWithTag("todo_actions")).getChildCount();
+            }
+        }});
+        assertNotNull(image[0]);assertEquals(done?TodoPanel.DONE_COLOR:TodoPanel.taskColor(color),image[0].getPixel(2,2));
+        image[0].recycle();assertEquals(done?1:2,actionCount[0]);
+    }
+
+    private void touchTodoControl(String description) {
+        SystemClock.sleep(700);
+        AccessibilityNodeInfo node=find(getInstrumentation().getUiAutomation().getRootInActiveWindow(),description,false);
+        assertNotNull(description,node);
+        Rect bounds=new Rect(); node.getBoundsInScreen(bounds); assertTrue(bounds.height()>0);
+        long down=SystemClock.uptimeMillis();
+        getInstrumentation().sendPointerSync(MotionEvent.obtain(down,down,MotionEvent.ACTION_DOWN,bounds.centerX(),bounds.centerY(),0));
+        getInstrumentation().sendPointerSync(MotionEvent.obtain(down,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,bounds.centerX(),bounds.centerY(),0));
+        getInstrumentation().waitForIdleSync();SystemClock.sleep(200);
+    }
+
+    public void testTodoColorSwipeCompletionPersistenceAndDelete() throws Exception {
+        String title=prefix+"彩色待办";
+        tap("待办",true);tap("新建待办",true);enterTask(title);
+        touchTodoControl("待办颜色：浅蓝");
+        assertTrue(find(getInstrumentation().getUiAutomation().getRootInActiveWindow(),"待办颜色：浅蓝",true).isSelected());
+        screenshot("待办新建与调色板");touchTodoControl("保存");
+        TodoStore.Item item=task(title);assertNotNull(item);assertEquals(3,item.color);assertTodoCard(item.id,false,3);
+        swipeTodo(item.id,true);screenshot("未完成待办滑动操作");tap("颜色",true);tap("待办颜色：浅粉",true);
+        assertEquals(4,task(title).color);assertTodoCard(item.id,false,4);
+        tap("完成待办："+title,true);assertTrue(task(title).done);assertTodoCard(item.id,true,4);
+        screenshot("待办完成后灰色卡片");swipeTodo(item.id,false);
+        assertNull(find(getInstrumentation().getUiAutomation().getRootInActiveWindow(),"颜色",true));
+        screenshot("已完成待办只有删除");tap("删除",true);tap("取消");assertNotNull(task(title));
+        main(new Runnable(){@Override public void run(){list.onBackPressed();}});
+        tap("标为未完成："+title,true);assertTodoCard(item.id,false,4);
+        Instrumentation.ActivityMonitor monitor=getInstrumentation().addMonitor(NotesList.class.getName(),null,false);
+        main(new Runnable(){@Override public void run(){list.recreate();}});
+        list=(NotesList)getInstrumentation().waitForMonitorWithTimeout(monitor,8000);getInstrumentation().removeMonitor(monitor);
+        assertNotNull(list);assertEquals(4,task(title).color);assertTodoCard(item.id,false,4);
+        swipeTodo(item.id,false);tap("删除",true);tap("删除");assertNull(task(title));
+    }
+
     @Override protected void tearDown() throws Exception {
         TodoStore taskStore = new TodoStore(getInstrumentation().getTargetContext());
         try { for (TodoStore.Item item : taskStore.items())
@@ -711,6 +857,7 @@ public class NotePadExtensionsTest extends ActivityInstrumentationTestCase2<Note
                 .getSharedPreferences("NotesList", 0).edit();
         if (hadSort) sort.putInt("sort_order", oldSort); else sort.remove("sort_order"); sort.commit();
         android.content.SharedPreferences.Editor font = NoteFeatures.preferences(getInstrumentation().getTargetContext()).edit();
+        if (hadTodoColor) font.putInt("todo_color",oldTodoColor); else font.remove("todo_color");
         if (hadFont) font.putInt("font_index", oldFont); else font.remove("font_index"); font.commit();
         super.tearDown();
     }

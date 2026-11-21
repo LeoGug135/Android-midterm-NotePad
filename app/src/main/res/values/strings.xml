@@ -15,6 +15,7 @@
 -->
 
 <resources>
+    <item type="id" name="new_note" />
     <string name="notes_select_all">全选</string>
     <string name="notes_unselect_all">取消全选</string>
     <string name="notes_selected_count">已选 %1$d 项</string>
@@ -44,7 +45,7 @@
     <string name="note_importance_description">重要度：%1$s</string>
     <string name="search_notes_hint">搜索标题或内容</string>
     <string name="note_updated_at">更新于：%1$s</string>
-    <string name="notes_empty">暂无笔记，点击右上角按钮新建</string>
+    <string name="notes_empty">暂无笔记，点击右下角“＋”新建</string>
     <string name="notes_search_empty">没有匹配的笔记</string>
     <string name="app_name">记事本</string>
     <string name="live_folder_name">我的笔记</string>

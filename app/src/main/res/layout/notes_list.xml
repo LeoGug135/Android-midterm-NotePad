@@ -51,8 +51,10 @@
         android:saveEnabled="false" />
 
     <TextView android:id="@+id/trash_notice" android:layout_width="match_parent"
-        android:layout_height="wrap_content" android:padding="12dp"
-        android:text="删除的笔记保留在此，可恢复或手动彻底删除"
+        android:layout_height="wrap_content"
+        android:paddingLeft="36dp" android:paddingRight="36dp"
+        android:paddingTop="8dp" android:paddingBottom="0dp"
+        android:text="已删除的笔记仅保留 30 天，逾期将永久删除。"
         android:textSize="12sp" android:textColor="#85898E" android:visibility="gone" />
     <FrameLayout
         android:id="@+id/notes_content"
@@ -63,7 +65,7 @@
         <com.example.android.notepad.NoteListView
             android:id="@android:id/list"
             android:divider="@android:color/transparent" android:dividerHeight="1dp"
-            android:clipToPadding="false" android:paddingTop="10dp" android:paddingBottom="20dp"
+            android:clipToPadding="false" android:paddingTop="8dp" android:paddingBottom="112dp"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
 

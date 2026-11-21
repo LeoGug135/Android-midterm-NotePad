@@ -13,14 +13,17 @@ final class TodoStore extends SQLiteOpenHelper {
         long id;
         String text;
         boolean done;
+        int color;
     }
 
-    TodoStore(Context context) { super(context, "todos.db", null, 1); }
+    TodoStore(Context context) { super(context, "todos.db", null, 2); }
     @Override public void onCreate(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE todos (_id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, "
-                + "done INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL)");
+                + "done INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, color INTEGER NOT NULL DEFAULT 0)");
     }
-    @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) { }
+    @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        if (oldVersion < 2) db.execSQL("ALTER TABLE todos ADD COLUMN color INTEGER NOT NULL DEFAULT 0");
+    }
 
     ArrayList<Item> items() {
         ArrayList<Item> result = new ArrayList<Item>();
@@ -32,14 +35,17 @@ final class TodoStore extends SQLiteOpenHelper {
                 item.id = cursor.getLong(cursor.getColumnIndexOrThrow("_id"));
                 item.text = cursor.getString(cursor.getColumnIndexOrThrow("text"));
                 item.done = cursor.getInt(cursor.getColumnIndexOrThrow("done")) != 0;
+                item.color = cursor.getInt(cursor.getColumnIndexOrThrow("color"));
                 result.add(item);
             }
         } finally { cursor.close(); }
         return result;
     }
-    long add(String text) {
+    long add(String text) { return add(text, 0); }
+    long add(String text, int color) {
         ContentValues values = new ContentValues();
         values.put("text", text); values.put("created", System.currentTimeMillis());
+        values.put("color", validColor(color));
         return getWritableDatabase().insertOrThrow("todos", null, values);
     }
     void setText(long id, String text) {
@@ -49,6 +55,14 @@ final class TodoStore extends SQLiteOpenHelper {
     void setDone(long id, boolean done) {
         ContentValues values = new ContentValues(); values.put("done", done ? 1 : 0);
         getWritableDatabase().update("todos", values, "_id=?", new String[] {"" + id});
+    }
+    private static int validColor(int color) {
+        if (color < 0 || color >= NoteFeatures.COLORS.length) throw new IllegalArgumentException("Invalid task color");
+        return color;
+    }
+    void setColor(long id, int color) {
+        ContentValues values = new ContentValues(); values.put("color", validColor(color));
+        getWritableDatabase().update("todos", values, "_id=? AND done=0", new String[] {"" + id});
     }
     void delete(long id) {
         getWritableDatabase().delete("todos", "_id=?", new String[] {"" + id});

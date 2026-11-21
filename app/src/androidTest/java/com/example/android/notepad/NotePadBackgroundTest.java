@@ -69,7 +69,18 @@ public class NotePadBackgroundTest extends ActivityInstrumentationTestCase2<Note
         getInstrumentation().sendPointerSync(android.view.MotionEvent.obtain(SystemClock.uptimeMillis(),SystemClock.uptimeMillis(),1,area.centerX(),area.centerY(),0));
         getInstrumentation().waitForIdleSync(); SystemClock.sleep(250);
     }
+    private void awaitWindowFocus() {
+        final boolean[] ready={false};
+        long deadline=SystemClock.uptimeMillis()+8000;
+        do {
+            main(new Runnable(){@Override public void run(){ready[0]=list.hasWindowFocus();}});
+            if(ready[0])return;
+            SystemClock.sleep(80);
+        } while(SystemClock.uptimeMillis()<deadline);
+        fail("Activity window did not gain focus before keyboard injection");
+    }
     private void assertWhite() {
+        awaitWindowFocus();
         final int[] color={0};
         final Rect point=new Rect();
         main(new Runnable() { @Override public void run() {
@@ -86,7 +97,7 @@ public class NotePadBackgroundTest extends ActivityInstrumentationTestCase2<Note
         assertEquals("Screen must stay white",0xffffffff,actual);
     }
     public void testRootFocusKeepsBackgroundWhiteAcrossTabsAndDialogs() throws Exception {
-        list=getActivity();
+        list=getActivity(); awaitWindowFocus();
         getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_TAB);
         assertWhite(); snapshot("01_focused_notes");
         for(int i=0;i<3;i++) {

@@ -334,7 +334,8 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
        }
 
        // Opens the database object in "read" mode, since no writes need to be done.
-       SQLiteDatabase db = mOpenHelper.getReadableDatabase();
+       SQLiteDatabase db = mOpenHelper.getWritableDatabase();
+       maintainTrash();
 
        /*
         * Performs the query. If no problems occur trying to read the database, then a Cursor
@@ -599,6 +600,7 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
 
         // If the insert succeeded, the row ID exists.
         if (rowId > 0) {
+            maintainTrash();
             // Creates a URI with the note ID pattern and the new row ID appended to it.
             Uri noteUri = ContentUris.withAppendedId(NotePad.Notes.CONTENT_ID_URI_BASE, rowId);
 
@@ -700,6 +702,7 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
          * that the incoming URI changed. The object passes this along to the resolver framework,
          * and observers that have registered themselves for the provider are notified.
          */
+        maintainTrash();
         getContext().getContentResolver().notifyChange(uri, null);
         if (!NotePad.Notes.CONTENT_URI.equals(uri))
             getContext().getContentResolver().notifyChange(NotePad.Notes.CONTENT_URI, null);
@@ -749,6 +752,7 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
 
 
         validateImportance(values);
+        maintainTrash();
 
         // Opens the database object in "write" mode.
         SQLiteDatabase db = mOpenHelper.getWritableDatabase();
@@ -814,12 +818,29 @@ public class NotePadProvider extends ContentProvider implements PipeDataWriter<C
          * that the incoming URI changed. The object passes this along to the resolver framework,
          * and observers that have registered themselves for the provider are notified.
          */
+        maintainTrash();
         getContext().getContentResolver().notifyChange(uri, null);
         if (!NotePad.Notes.CONTENT_URI.equals(uri))
             getContext().getContentResolver().notifyChange(NotePad.Notes.CONTENT_URI, null);
 
         // Returns the number of rows updated.
         return count;
+    }
+
+    private synchronized int maintainTrash() {
+        SQLiteDatabase database = mOpenHelper.getWritableDatabase();
+        long now = System.currentTimeMillis();
+        int removed = TrashRetention.purge(database, now);
+        TrashRetention.schedule(getContext(), database, now);
+        if (removed > 0) getContext().getContentResolver().notifyChange(NotePad.Notes.CONTENT_URI, null);
+        return removed;
+    }
+
+    @Override public Bundle call(String method, String arg, Bundle extras) {
+        if ("purgeExpiredTrash".equals(method)) {
+            Bundle result = new Bundle(); result.putInt("removed", maintainTrash()); return result;
+        }
+        return super.call(method, arg, extras);
     }
 
     private ContentValues categoryValues(ContentValues input) {
